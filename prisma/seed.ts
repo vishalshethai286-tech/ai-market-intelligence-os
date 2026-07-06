@@ -100,9 +100,9 @@ const roles = [
     permissions: ["workspace:read", "workspace:update", "members:*"],
   },
   {
-    key: "MEMBER",
-    name: "Member",
-    description: "Standard workspace member.",
+    key: "SALES_USER",
+    name: "Sales User",
+    description: "Standard workspace member working with sales/market data.",
     permissions: ["workspace:read"],
   },
   {
@@ -122,6 +122,16 @@ async function main() {
       update: data,
     });
     console.log(`Seeded role: ${role.name}`);
+  }
+
+  // Superseded by SALES_USER — drop it if nothing references it yet.
+  const staleMemberRole = await prisma.role.findUnique({
+    where: { key: "MEMBER" },
+    include: { _count: { select: { members: true } } },
+  });
+  if (staleMemberRole && staleMemberRole._count.members === 0) {
+    await prisma.role.delete({ where: { key: "MEMBER" } });
+    console.log("Removed stale MEMBER role (superseded by SALES_USER)");
   }
 
   for (const plan of plans) {

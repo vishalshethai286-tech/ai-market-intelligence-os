@@ -30,13 +30,33 @@ Soft delete (`deletedAt`) is used on entities users can remove (User, Workspace,
 Email/password auth via [Auth.js (NextAuth v5)](https://authjs.dev), configured in [`src/auth.ts`](src/auth.ts):
 
 - **Credentials provider** — email/password checked against `User.passwordHash` (hashed with `bcryptjs`), JWT session strategy (required for the Credentials provider).
-- **Signup** ([`src/lib/actions/auth.ts`](src/lib/actions/auth.ts)) creates the `User`, a new `Workspace`, and a `WorkspaceMember` with the `OWNER` role in one transaction, then signs the user in. Every signup founds its own workspace — there's no invite flow yet, so this is how "first user becomes workspace owner" is satisfied for each workspace.
-- **Session** — the JWT is enriched with `workspaceId`, `workspaceSlug`, `workspaceName`, and `role` on sign-in (see the `jwt`/`session` callbacks), so pages can read them off `session.user` without an extra query.
-- **Route protection** — authoritative check in `src/app/dashboard/layout.tsx` and `src/app/dashboard/page.tsx` (redirects to `/login` server-side), plus an optimistic `src/proxy.ts` that redirects logged-out users away from `/dashboard/*` and logged-in users away from `/login` and `/signup`.
+- **Signup** ([`src/lib/actions/auth.ts`](src/lib/actions/auth.ts)) creates the `User` and a new `Workspace` owned by them (via `createWorkspaceWithOwner`, see below) in one transaction, then signs the user in.
+- **Session** — the JWT/session only carries identity (`id`, `email`, `name`). Workspace + role are resolved per-request (see Workspace management below), not embedded in the token, so switching workspaces takes effect immediately without a token refresh.
+- **Route protection** — authoritative check in `src/app/dashboard/layout.tsx` and every dashboard page (redirects to `/login` server-side), plus an optimistic `src/proxy.ts` that redirects logged-out users away from `/dashboard/*` and logged-in users away from `/login` and `/signup`.
 - **Pages**: `/login`, `/signup`, `/forgot-password` (placeholder — validates input and shows a generic confirmation message, but does not send an email or touch the database yet).
 - Requires `AUTH_SECRET` in `.env` (generate with `openssl rand -base64 32`).
 
-Seeded system roles: `OWNER`, `ADMIN`, `MEMBER`, `VIEWER` (see `prisma/seed.ts`) — `WorkspaceMember.roleId` requires one of these to exist, so run the seed before testing signup.
+## Workspace management
+
+- **Multiple workspaces per user** — a signup creates one workspace (owned by that user), but a user can create or belong to more. `src/lib/workspace.ts` is the single source of truth for "which workspace is this request in the context of":
+  - `getWorkspaceContext()` reads the session, the user's memberships, and the `active_workspace` cookie, and resolves the active one (falling back to the oldest membership if the cookie is missing/stale).
+  - `requireActiveWorkspace()` — same, but redirects to `/dashboard/workspaces/new` if the user has no workspace at all.
+  - `createWorkspaceWithOwner(name, userId, client?)` — creates a Workspace + an OWNER `WorkspaceMember`; accepts an optional transaction client so it can be composed into a larger transaction (used by both signup and "create workspace").
+- **Create workspace**: `/dashboard/workspaces/new` — any signed-in user can create an additional workspace and becomes its owner.
+- **Switch workspace**: the sidebar's `WorkspaceSwitcher` calls the `switchWorkspace` server action directly (not a form submit), which sets the `active_workspace` cookie after verifying the user is actually a member, then revalidates the dashboard.
+- **Workspace settings** (`/dashboard/settings`): rename the workspace, view members, and an invite-member **placeholder** (validates email/role, shows a confirmation message, but doesn't send an email or persist an invite yet) — both gated by role.
+- **Roles**: `OWNER`, `ADMIN`, `SALES_USER`, `VIEWER` (seeded in `prisma/seed.ts` — `WorkspaceMember.roleId` requires one of these to exist, so run the seed before testing signup).
+- **Access control** (`src/lib/access-control.ts`): pure role-check helpers — `canManageWorkspace`, `canInviteMembers`, `canManageBilling`, `canRemoveMember`, `isOwner` — plus a `requireRole()` guard that throws `AccessDeniedError` for use in actions/route handlers. Only `OWNER`/`ADMIN` can rename the workspace or invite members; only `OWNER` can manage billing or remove another `OWNER`.
+
+### Convention: every model belongs to a workspace
+
+New Prisma models should carry a `workspaceId` (with a relation to `Workspace`) unless they're genuinely global (an account, or a shared catalog like `Role`/`Plan`). This is enforced by:
+
+```bash
+npm run check:schema
+```
+
+which fails if a non-exempt model in `prisma/schema.prisma` is missing `workspaceId` (see `scripts/check-workspace-scoping.mjs` for the exempt list).
 
 ## Project structure
 
@@ -59,21 +79,29 @@ src/
       forgot-password/   /forgot-password (placeholder)
     api/auth/[...nextauth]/route.ts   Auth.js route handler
     dashboard/
-      layout.tsx         Dashboard shell (sidebar + topbar) — session check + redirect
-      page.tsx           Dashboard home — session check + redirect
+      layout.tsx         Dashboard shell (sidebar + topbar) — session + workspace context
+      page.tsx           Dashboard home
+      settings/          Workspace settings: rename, members, invite placeholder
+      workspaces/new/    Create-workspace page
   components/
     landing/             Landing page sections
-    dashboard/            Dashboard shell components
+    dashboard/            Sidebar, topbar, workspace switcher
   config/
     site.ts              Site name, nav links, dashboard nav
   lib/
     prisma.ts            Prisma client singleton (uses driver adapter)
     slug.ts              Workspace slug generation/uniqueness
-    actions/auth.ts       Server actions: signup, login, logout, requestPasswordReset
-    validations/auth.ts   Zod schemas for signup/login forms
-  types/next-auth.d.ts   Session/JWT type augmentation (id, workspaceId, role, ...)
+    access-control.ts     Role constants + permission predicates + requireRole guard
+    workspace.ts          Active-workspace resolution, workspace creation
+    actions/auth.ts        Server actions: signup, login, logout, requestPasswordReset
+    actions/workspace.ts   Server actions: createWorkspace, switchWorkspace, renameWorkspace, inviteMember
+    validations/auth.ts    Zod schemas for signup/login forms
+    validations/workspace.ts  Zod schemas for workspace name / invite forms
+  types/next-auth.d.ts   Session/JWT type augmentation (id)
   generated/
     prisma/               Generated Prisma client (gitignored, not committed)
+scripts/
+  check-workspace-scoping.mjs   Fails if a model is missing workspaceId
 ```
 
 ## Local setup
@@ -114,7 +142,7 @@ src/
    npx prisma db seed
    ```
 
-   This upserts the system roles (`OWNER`, `ADMIN`, `MEMBER`, `VIEWER`) and the 5 plans (Free Trial, Starter, Professional, Business, Enterprise) — safe to re-run. The `OWNER` role must exist before anyone can sign up.
+   This upserts the system roles (`OWNER`, `ADMIN`, `SALES_USER`, `VIEWER`) and the 5 plans (Free Trial, Starter, Professional, Business, Enterprise) — safe to re-run. The `OWNER` role must exist before anyone can sign up.
 
 5. **Run the dev server**
 
@@ -132,6 +160,7 @@ src/
 | `npm run build`     | Production build                 |
 | `npm run start`     | Run the production build         |
 | `npm run lint`      | Lint the codebase                |
+| `npm run check:schema` | Fail if a model is missing `workspaceId` |
 | `npx prisma generate` | Regenerate the Prisma client   |
 | `npx prisma migrate dev` | Create/apply a migration (dev) |
 | `npx prisma migrate deploy` | Apply existing migrations (CI/prod) |

@@ -1,10 +1,11 @@
 "use server";
 
 import bcrypt from "bcryptjs";
+import { cookies } from "next/headers";
 import { AuthError } from "next-auth";
 import { signIn, signOut } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { uniqueWorkspaceSlug } from "@/lib/slug";
+import { ACTIVE_WORKSPACE_COOKIE, createWorkspaceWithOwner } from "@/lib/workspace";
 import {
   LoginSchema,
   SignupSchema,
@@ -33,33 +34,25 @@ export async function signup(
     return { errors: { email: ["An account with this email already exists."] } };
   }
 
-  const ownerRole = await prisma.role.findUnique({ where: { key: "OWNER" } });
-  if (!ownerRole) {
-    return { message: "Server is not set up correctly (missing OWNER role). Run the seed script." };
-  }
-
   const passwordHash = await bcrypt.hash(password, 12);
-  const workspaceSlug = await uniqueWorkspaceSlug(`${name}'s Workspace`);
 
-  await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: { name, email, passwordHash },
-    });
-
-    const workspace = await tx.workspace.create({
-      data: { name: `${name}'s Workspace`, slug: workspaceSlug },
-    });
-
-    await tx.workspaceMember.create({
-      data: {
-        workspaceId: workspace.id,
-        userId: user.id,
-        roleId: ownerRole.id,
-        status: "ACTIVE",
-        joinedAt: new Date(),
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        const user = await tx.user.create({
+          data: { name, email, passwordHash },
+        });
+        await createWorkspaceWithOwner(`${name}'s Workspace`, user.id, tx);
       },
-    });
-  });
+      // Default 5s timeout is tight for a 3-write onboarding transaction; give it headroom.
+      { timeout: 15_000 },
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("OWNER role")) {
+      return { message: "Server is not set up correctly (missing OWNER role). Run the seed script." };
+    }
+    throw error;
+  }
 
   try {
     await signIn("credentials", { email, password, redirectTo: "/dashboard" });
@@ -97,6 +90,12 @@ export async function login(
 }
 
 export async function logout() {
+  // The active-workspace cookie isn't tied to a session, so clear it here —
+  // otherwise the next person to sign in on this browser could inherit
+  // whichever workspace was last selected.
+  const cookieStore = await cookies();
+  cookieStore.delete(ACTIVE_WORKSPACE_COOKIE);
+
   await signOut({ redirectTo: "/" });
 }
 

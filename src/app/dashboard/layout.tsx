@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Topbar } from "@/components/dashboard/topbar";
 
@@ -14,11 +15,21 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
+  const context = await getWorkspaceContext();
+  const workspaces = (context?.memberships ?? []).map((m) => ({
+    id: m.workspace.id,
+    name: m.workspace.name,
+  }));
+
   return (
     <div className="flex min-h-full flex-1">
-      <Sidebar />
+      <Sidebar workspaces={workspaces} activeWorkspaceId={context?.active?.workspace.id} />
       <div className="flex flex-1 flex-col">
-        <Topbar user={session.user} />
+        <Topbar
+          user={session.user}
+          workspaceName={context?.active?.workspace.name}
+          role={context?.active?.role}
+        />
         <main className="flex-1 px-6 py-8">{children}</main>
       </div>
     </div>

@@ -42,28 +42,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async jwt({ token, user }) {
       if (user?.id) {
         token.id = user.id;
-
-        const membership = await prisma.workspaceMember.findFirst({
-          where: { userId: user.id, deletedAt: null },
-          orderBy: { createdAt: "asc" },
-          include: { workspace: true, role: true },
-        });
-
-        if (membership) {
-          token.workspaceId = membership.workspace.id;
-          token.workspaceSlug = membership.workspace.slug;
-          token.workspaceName = membership.workspace.name;
-          token.role = membership.role.key;
-        }
       }
       return token;
     },
     async session({ session, token }) {
       session.user.id = token.id;
-      session.user.workspaceId = token.workspaceId;
-      session.user.workspaceSlug = token.workspaceSlug;
-      session.user.workspaceName = token.workspaceName;
-      session.user.role = token.role;
       return session;
     },
   },
