@@ -86,7 +86,44 @@ const plans = [
   },
 ];
 
+const roles = [
+  {
+    key: "OWNER",
+    name: "Owner",
+    description: "Full control over the workspace, billing, and members.",
+    permissions: ["workspace:*", "billing:*", "members:*"],
+  },
+  {
+    key: "ADMIN",
+    name: "Admin",
+    description: "Can manage members and workspace settings, not billing.",
+    permissions: ["workspace:read", "workspace:update", "members:*"],
+  },
+  {
+    key: "MEMBER",
+    name: "Member",
+    description: "Standard workspace member.",
+    permissions: ["workspace:read"],
+  },
+  {
+    key: "VIEWER",
+    name: "Viewer",
+    description: "Read-only access to the workspace.",
+    permissions: ["workspace:read"],
+  },
+];
+
 async function main() {
+  for (const role of roles) {
+    const { key, ...data } = role;
+    await prisma.role.upsert({
+      where: { key },
+      create: { key, isSystem: true, ...data },
+      update: data,
+    });
+    console.log(`Seeded role: ${role.name}`);
+  }
+
   for (const plan of plans) {
     const { key, ...data } = plan;
     await prisma.plan.upsert({

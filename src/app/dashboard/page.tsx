@@ -1,9 +1,20 @@
-export default function DashboardPage() {
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+
+export default async function DashboardPage() {
+  const session = await auth();
+
+  if (!session?.user) {
+    redirect("/login");
+  }
+
   return (
     <div className="mx-auto max-w-4xl">
-      <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">
+        Welcome, {session.user.name ?? session.user.email}
+      </h1>
       <p className="mt-2 text-black/60 dark:text-white/60">
-        This is the dashboard foundation. No business features are wired up yet.
+        {session.user.workspaceName} &middot; {session.user.role}
       </p>
 
       <div className="mt-8 rounded-xl border border-dashed border-black/[.12] p-8 text-center text-sm text-black/50 dark:border-white/[.145] dark:text-white/50">
