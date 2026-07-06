@@ -1,0 +1,303 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum WorkspaceMemberStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+  INCOMPLETE
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum PlanKey {
+  FREE_TRIAL
+  STARTER
+  PROFESSIONAL
+  BUSINESS
+  ENTERPRISE
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+/// A person who can sign in. Users are global — a single User can belong to
+/// multiple Workspaces (tenants) via WorkspaceMember.
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String?
+  passwordHash    String?   @map("password_hash")
+  avatarUrl       String?   @map("avatar_url")
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  memberships     WorkspaceMember[]
+  apiCostLogs     ApiCostLog[]
+  usageLogs       UsageLog[]
+  auditLogsActing AuditLog[]        @relation("AuditLogActor")
+
+  @@index([deletedAt])
+  @@map("users")
+}
+
+/// A tenant. All tenant-scoped data (members, subscription, usage, logs)
+/// hangs off a Workspace.
+model Workspace {
+  id      String  @id @default(cuid())
+  name    String
+  slug    String  @unique
+  logoUrl String? @map("logo_url")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  members      WorkspaceMember[]
+  subscription Subscription?
+  usageLogs    UsageLog[]
+  apiCostLogs  ApiCostLog[]
+  auditLogs    AuditLog[]
+
+  @@index([deletedAt])
+  @@map("workspaces")
+}
+
+/// Catalog of roles a WorkspaceMember can hold (e.g. OWNER, ADMIN, MEMBER,
+/// VIEWER). Kept as a table rather than an enum so permissions can evolve
+/// without a schema migration.
+model Role {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  name        String
+  description String?
+  permissions Json    @default("[]")
+  isSystem    Boolean @default(true) @map("is_system")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members WorkspaceMember[]
+
+  @@map("roles")
+}
+
+/// Join table between User and Workspace, carrying the member's Role and
+/// membership lifecycle state within that tenant.
+model WorkspaceMember {
+  id          String                @id @default(cuid())
+  workspaceId String                @map("workspace_id")
+  userId      String                @map("user_id")
+  roleId      String                @map("role_id")
+  status      WorkspaceMemberStatus @default(INVITED)
+
+  invitedAt DateTime? @map("invited_at")
+  joinedAt  DateTime? @map("joined_at")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([deletedAt])
+  @@map("workspace_members")
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+/// Sellable plan catalog (Free Trial, Starter, Professional, Business,
+/// Enterprise). Plans are configuration/reference data — retire a plan with
+/// `isActive = false` instead of deleting it, since Subscriptions reference it.
+model Plan {
+  id          String  @id @default(cuid())
+  key         PlanKey @unique
+  name        String
+  description String?
+
+  priceCents      Int             @default(0) @map("price_cents")
+  currency        String          @default("usd")
+  billingInterval BillingInterval @default(MONTHLY) @map("billing_interval")
+  trialDays       Int             @default(0) @map("trial_days")
+
+  maxSeats      Int? @map("max_seats")
+  maxWorkspaces Int? @map("max_workspaces")
+
+  /// Metering limits, e.g. { "apiCallsPerMonth": 10000, "reportsPerMonth": 50 }
+  usageLimits Json @default("{}") @map("usage_limits")
+
+  /// Feature flags, e.g. ["ai_insights", "priority_support"]
+  features Json @default("[]")
+
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  subscriptions Subscription[]
+
+  @@index([isActive])
+  @@map("plans")
+}
+
+/// A Workspace's current subscription to a Plan. One active subscription per
+/// Workspace; historical billing events belong in a future Invoice model.
+model Subscription {
+  id          String @id @default(cuid())
+  workspaceId String @unique @map("workspace_id")
+  planId      String @map("plan_id")
+
+  status SubscriptionStatus @default(TRIALING)
+  seats  Int                @default(1)
+
+  currentPeriodStart DateTime? @map("current_period_start")
+  currentPeriodEnd   DateTime? @map("current_period_end")
+  trialEndsAt        DateTime? @map("trial_ends_at")
+  cancelAt           DateTime? @map("cancel_at")
+  canceledAt         DateTime? @map("canceled_at")
+
+  stripeCustomerId     String? @map("stripe_customer_id")
+  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan      Plan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([planId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+// ---------------------------------------------------------------------------
+// Metering & logs
+//
+// These are append-only records: no `updatedAt`/`deletedAt`, since rows are
+// written once and never mutated. Retention/cleanup is a job, not a soft
+// delete.
+// ---------------------------------------------------------------------------
+
+/// Product usage events, for metering against a Plan's usageLimits.
+model UsageLog {
+  id          String  @id @default(cuid())
+  workspaceId String  @map("workspace_id")
+  userId      String? @map("user_id")
+
+  /// e.g. "api_call", "report_generated", "seat_active"
+  metric   String
+  quantity Decimal @default(1) @db.Decimal(20, 6)
+  metadata Json?
+
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, metric, occurredAt])
+  @@index([userId])
+  @@map("usage_logs")
+}
+
+/// Cost of a single call to an external AI/API provider, for cost tracking
+/// and margin analysis per workspace/user.
+model ApiCostLog {
+  id          String  @id @default(cuid())
+  workspaceId String  @map("workspace_id")
+  userId      String? @map("user_id")
+
+  /// e.g. "anthropic", "openai"
+  provider  String
+  /// e.g. "claude-sonnet-5", "gpt-5"
+  model     String
+  /// e.g. "chat.completion", "embedding"
+  operation String?
+
+  promptTokens     Int    @default(0) @map("prompt_tokens")
+  completionTokens Int    @default(0) @map("completion_tokens")
+  totalTokens      Int    @default(0) @map("total_tokens")
+  /// Cost in micro-units of `currency` (1,000,000 = 1.00) to avoid float rounding.
+  costMicros       BigInt @default(0) @map("cost_micros")
+  currency         String @default("usd")
+
+  requestId String? @map("request_id")
+  metadata  Json?
+
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, occurredAt])
+  @@index([provider, model])
+  @@index([userId])
+  @@map("api_cost_logs")
+}
+
+/// Immutable trail of who did what. workspaceId is nullable to allow
+/// platform-level events (e.g. login) that aren't scoped to a tenant.
+model AuditLog {
+  id          String  @id @default(cuid())
+  workspaceId String? @map("workspace_id")
+  actorId     String? @map("actor_id")
+
+  /// e.g. "workspace.member.invited", "subscription.plan_changed"
+  action     String
+  targetType String? @map("target_type")
+  targetId   String? @map("target_id")
+  metadata   Json?
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?      @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId])
+  @@index([action])
+  @@map("audit_logs")
+}
