@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useTransition } from "react";
 import { switchWorkspace } from "@/lib/actions/workspace";
+import { useMobileNav } from "@/components/dashboard/mobile-nav-context";
+import { Select } from "@/components/ui/select";
 
 export function WorkspaceSwitcher({
   workspaces,
@@ -12,10 +14,11 @@ export function WorkspaceSwitcher({
   activeWorkspaceId?: string;
 }) {
   const [isPending, startTransition] = useTransition();
+  const { setOpen } = useMobileNav();
 
   return (
     <div className="px-3 pb-3">
-      <select
+      <Select
         value={activeWorkspaceId ?? ""}
         disabled={isPending || workspaces.length === 0}
         onChange={(event) => {
@@ -23,8 +26,9 @@ export function WorkspaceSwitcher({
           startTransition(async () => {
             await switchWorkspace(workspaceId);
           });
+          setOpen(false);
         }}
-        className="w-full rounded-md border border-black/[.08] bg-transparent px-2 py-1.5 text-sm outline-none disabled:opacity-50 dark:border-white/[.145]"
+        className="py-1.5"
       >
         {workspaces.length === 0 && <option value="">No workspace</option>}
         {workspaces.map((workspace) => (
@@ -32,9 +36,10 @@ export function WorkspaceSwitcher({
             {workspace.name}
           </option>
         ))}
-      </select>
+      </Select>
       <Link
         href="/dashboard/workspaces/new"
+        onClick={() => setOpen(false)}
         className="mt-2 block text-center text-xs text-black/50 hover:text-current dark:text-white/50"
       >
         + Create workspace

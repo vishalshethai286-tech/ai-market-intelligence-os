@@ -48,6 +48,14 @@ Email/password auth via [Auth.js (NextAuth v5)](https://authjs.dev), configured 
 - **Roles**: `OWNER`, `ADMIN`, `SALES_USER`, `VIEWER` (seeded in `prisma/seed.ts` — `WorkspaceMember.roleId` requires one of these to exist, so run the seed before testing signup).
 - **Access control** (`src/lib/access-control.ts`): pure role-check helpers — `canManageWorkspace`, `canInviteMembers`, `canManageBilling`, `canRemoveMember`, `isOwner` — plus a `requireRole()` guard that throws `AccessDeniedError` for use in actions/route handlers. Only `OWNER`/`ADMIN` can rename the workspace or invite members; only `OWNER` can manage billing or remove another `OWNER`.
 
+## Dashboard layout & UI components
+
+- **Shell** (`src/app/dashboard/layout.tsx`): sidebar + topbar, wrapped in a `MobileNavProvider` (`src/components/dashboard/mobile-nav-context.tsx`) so the sidebar can act as a slide-in drawer on mobile (`sm:` breakpoint and below) — a hamburger button in the topbar toggles it, a backdrop and nav-link clicks close it.
+- **Workspace switcher** and **user menu** (avatar → name/email/workspace/role, settings link, logout) live in `src/components/dashboard/`. The user menu closes on outside click or Escape.
+- **Dashboard home**: empty-state cards (Team, Market Signals, Reports, Getting Started) using the `Card` primitive — no business data yet, but `Team` shows a real member count since it's a free query.
+- **Reusable primitives** (`src/components/ui/`): `Button`, `Input`, `Label`, `Select`, `Badge`, `Card`, `Table` (+ `FieldError` for form errors) — built on `class-variance-authority` for variants and a `cn()` helper (`clsx` + `tailwind-merge`) in `src/lib/cn.ts`. Every form and table in the app (login, signup, forgot-password, create/rename workspace, invite member, members table) uses these instead of ad-hoc styling.
+  - `Table`'s wrapper uses `overflow-x-auto` (not `overflow-hidden`) so extra columns scroll horizontally on narrow screens instead of being clipped.
+
 ### Convention: every model belongs to a workspace
 
 New Prisma models should carry a `workspaceId` (with a relation to `Workspace`) unless they're genuinely global (an account, or a shared catalog like `Role`/`Plan`). This is enforced by:
@@ -85,10 +93,12 @@ src/
       workspaces/new/    Create-workspace page
   components/
     landing/             Landing page sections
-    dashboard/            Sidebar, topbar, workspace switcher
+    dashboard/            Sidebar, topbar, workspace switcher, user menu, mobile nav context
+    ui/                   Reusable primitives: Button, Input, Label, Select, Badge, Card, Table, FieldError
   config/
     site.ts              Site name, nav links, dashboard nav
   lib/
+    cn.ts                clsx + tailwind-merge helper
     prisma.ts            Prisma client singleton (uses driver adapter)
     slug.ts              Workspace slug generation/uniqueness
     access-control.ts     Role constants + permission predicates + requireRole guard

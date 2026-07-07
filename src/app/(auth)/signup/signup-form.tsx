@@ -2,6 +2,10 @@
 
 import { useActionState } from "react";
 import { signup } from "@/lib/actions/auth";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 
 export function SignupForm() {
   const [state, action, pending] = useActionState(signup, undefined);
@@ -9,51 +13,20 @@ export function SignupForm() {
   return (
     <form action={action} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="name" className="text-sm font-medium">
-          Name
-        </label>
-        <input
-          id="name"
-          name="name"
-          type="text"
-          required
-          autoComplete="name"
-          className="rounded-lg border border-black/[.08] bg-transparent px-3 py-2 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/40"
-        />
-        {state?.errors?.name && (
-          <p className="text-sm text-red-600 dark:text-red-400">{state.errors.name[0]}</p>
-        )}
+        <Label htmlFor="name">Name</Label>
+        <Input id="name" name="name" type="text" required autoComplete="name" />
+        <FieldError>{state?.errors?.name}</FieldError>
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="email" className="text-sm font-medium">
-          Email
-        </label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          required
-          autoComplete="email"
-          className="rounded-lg border border-black/[.08] bg-transparent px-3 py-2 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/40"
-        />
-        {state?.errors?.email && (
-          <p className="text-sm text-red-600 dark:text-red-400">{state.errors.email[0]}</p>
-        )}
+        <Label htmlFor="email">Email</Label>
+        <Input id="email" name="email" type="email" required autoComplete="email" />
+        <FieldError>{state?.errors?.email}</FieldError>
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="password" className="text-sm font-medium">
-          Password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          required
-          autoComplete="new-password"
-          className="rounded-lg border border-black/[.08] bg-transparent px-3 py-2 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/40"
-        />
+        <Label htmlFor="password">Password</Label>
+        <Input id="password" name="password" type="password" required autoComplete="new-password" />
         {state?.errors?.password ? (
           <ul className="text-sm text-red-600 dark:text-red-400">
             {state.errors.password.map((error) => (
@@ -67,15 +40,11 @@ export function SignupForm() {
         )}
       </div>
 
-      {state?.message && <p className="text-sm text-red-600 dark:text-red-400">{state.message}</p>}
+      <FieldError>{state?.message}</FieldError>
 
-      <button
-        type="submit"
-        disabled={pending}
-        className="mt-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background transition-colors hover:opacity-90 disabled:opacity-50"
-      >
+      <Button type="submit" disabled={pending} className="mt-2">
         {pending ? "Creating account..." : "Create account"}
-      </button>
+      </Button>
     </form>
   );
 }
