@@ -67,12 +67,13 @@ model User {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  memberships             WorkspaceMember[]
-  apiCostLogs             ApiCostLog[]
-  usageLogs               UsageLog[]
-  auditLogsActing         AuditLog[]        @relation("AuditLogActor")
-  approvedCompanyProfiles CompanyProfile[]  @relation("CompanyProfileApprovedBy")
-  approvedProductServices ProductService[]  @relation("ProductServiceApprovedBy")
+  memberships              WorkspaceMember[]
+  apiCostLogs              ApiCostLog[]
+  usageLogs                UsageLog[]
+  auditLogsActing          AuditLog[]        @relation("AuditLogActor")
+  approvedCompanyProfiles  CompanyProfile[]  @relation("CompanyProfileApprovedBy")
+  approvedProductServices  ProductService[]  @relation("ProductServiceApprovedBy")
+  triggeredBrainUpdateRuns BrainUpdateRun[]  @relation("BrainUpdateRunTriggeredBy")
 
   @@index([deletedAt])
   @@map("users")
@@ -90,15 +91,21 @@ model Workspace {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  members         WorkspaceMember[]
-  subscription    Subscription?
-  onboarding      WorkspaceOnboarding?
-  websiteAnalyses WebsiteAnalysis[]
-  companyProfile  CompanyProfile?
-  productServices ProductService[]
-  usageLogs       UsageLog[]
-  apiCostLogs     ApiCostLog[]
-  auditLogs       AuditLog[]
+  members            WorkspaceMember[]
+  subscription       Subscription?
+  onboarding         WorkspaceOnboarding?
+  websiteAnalyses    WebsiteAnalysis[]
+  companyProfile     CompanyProfile?
+  productServices    ProductService[]
+  businessBrain      BusinessBrain?
+  brainFacts         BrainFact[]
+  brainSources       BrainSource[]
+  brainEntities      BrainEntity[]
+  brainRelationships BrainRelationship[]
+  brainUpdateRuns    BrainUpdateRun[]
+  usageLogs          UsageLog[]
+  apiCostLogs        ApiCostLog[]
+  auditLogs          AuditLog[]
 
   @@index([deletedAt])
   @@map("workspaces")
@@ -399,6 +406,7 @@ model WebsiteAnalysis {
   workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   companyProfiles CompanyProfile[]
   productServices ProductService[]
+  brainSources    BrainSource[]
 
   @@index([workspaceId, createdAt])
   @@index([status])
@@ -523,4 +531,267 @@ model ProductService {
   @@index([workspaceId, status])
   @@index([websiteAnalysisId])
   @@map("product_services")
+}
+
+// ---------------------------------------------------------------------------
+// AI Business Brain
+//
+// A per-workspace knowledge base built up over time from every source this
+// app can read (website analysis today; documents/APIs/manual entry later).
+// BusinessBrain is the aggregate root; BrainSource records where knowledge
+// came from, BrainFact/BrainEntity/BrainRelationship are the knowledge itself
+// (atomic facts, named entities, and edges between entities), and
+// BrainUpdateRun is the history of refresh operations that populate them.
+// ---------------------------------------------------------------------------
+
+enum BusinessBrainStatus {
+  INITIALIZING
+  ACTIVE
+  STALE
+}
+
+/// Broad knowledge categories a fact can belong to. OTHER is the escape
+/// hatch for anything that doesn't fit yet — factType stays a bounded,
+/// indexable enum instead of free text, but never blocks ingestion.
+enum BrainFactType {
+  COMPANY_NAME
+  BUSINESS_DESCRIPTION
+  INDUSTRY
+  BUSINESS_MODEL
+  HEADQUARTERS
+  COUNTRY_SERVED
+  OPERATION_TYPE
+  CERTIFICATION
+  PRODUCT_OR_SERVICE
+  TARGET_INDUSTRY
+  BUYER_TYPE
+  KEYWORD
+  CONTACT_INFO
+  FINANCIAL
+  LEADERSHIP
+  OTHER
+}
+
+enum BrainEntityType {
+  ORGANIZATION
+  PERSON
+  PRODUCT
+  LOCATION
+  CERTIFICATION
+  INDUSTRY
+  OTHER
+}
+
+enum BrainSourceType {
+  WEBSITE_PAGE
+  DOCUMENT
+  MANUAL_ENTRY
+  THIRD_PARTY_API
+  OTHER
+}
+
+enum BrainUpdateRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum BrainUpdateTrigger {
+  ONBOARDING
+  MANUAL
+  SCHEDULED
+  WEBSITE_ANALYSIS
+}
+
+/// The aggregate root of a workspace's knowledge base. One per workspace —
+/// everything else in this section (facts, sources, entities, relationships,
+/// update runs) hangs off a BusinessBrain, and also carries workspaceId
+/// directly so it can be queried without a join.
+model BusinessBrain {
+  id          String @id @default(cuid())
+  workspaceId String @unique @map("workspace_id")
+
+  status        BusinessBrainStatus @default(INITIALIZING)
+  lastUpdatedAt DateTime?           @map("last_updated_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  facts         BrainFact[]
+  sources       BrainSource[]
+  entities      BrainEntity[]
+  relationships BrainRelationship[]
+  updateRuns    BrainUpdateRun[]
+
+  @@index([status])
+  @@map("business_brains")
+}
+
+/// Where a piece of knowledge came from — a fetched page today, a document
+/// or manual entry later. Optionally traceable back to the WebsiteAnalysis
+/// run that produced it.
+model BrainSource {
+  id                String  @id @default(cuid())
+  workspaceId       String  @map("workspace_id")
+  brainId           String  @map("brain_id")
+  websiteAnalysisId String? @map("website_analysis_id")
+
+  sourceType BrainSourceType @default(WEBSITE_PAGE) @map("source_type")
+  url        String?
+  title      String?
+  fetchedAt  DateTime?       @map("fetched_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain           BusinessBrain       @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  websiteAnalysis WebsiteAnalysis?    @relation(fields: [websiteAnalysisId], references: [id], onDelete: SetNull)
+  facts           BrainFact[]
+  relationships   BrainRelationship[]
+
+  @@index([workspaceId])
+  @@index([brainId])
+  @@index([websiteAnalysisId])
+  @@map("brain_sources")
+}
+
+/// A named "node" the brain has identified — an organization, person,
+/// product, location, certification, etc. BrainRelationship connects two
+/// entities; BrainFact can optionally attach to the entity it's about.
+model BrainEntity {
+  id          String @id @default(cuid())
+  workspaceId String @map("workspace_id")
+  brainId     String @map("brain_id")
+
+  entityType      BrainEntityType @default(OTHER) @map("entity_type")
+  name            String
+  description     String?
+  confidenceScore Float           @default(0) @map("confidence_score")
+  /// Freeform extra attributes that don't warrant their own column, e.g. { "website": "..." }
+  metadata        Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain             BusinessBrain       @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  facts             BrainFact[]
+  relationshipsFrom BrainRelationship[] @relation("BrainRelationshipFromEntity")
+  relationshipsTo   BrainRelationship[] @relation("BrainRelationshipToEntity")
+
+  @@index([workspaceId, entityType])
+  @@index([brainId])
+  @@map("brain_entities")
+}
+
+/// A directed edge between two BrainEntity nodes, e.g. "Acme Corp"
+/// --CERTIFIED_BY--> "ISO 9001". relationshipType is free text (like
+/// ProductService.category elsewhere) since the vocabulary of possible
+/// relationships is open-ended, not a fixed set.
+model BrainRelationship {
+  id          String  @id @default(cuid())
+  workspaceId String  @map("workspace_id")
+  brainId     String  @map("brain_id")
+  sourceId    String? @map("source_id")
+
+  fromEntityId String @map("from_entity_id")
+  toEntityId   String @map("to_entity_id")
+
+  /// e.g. "HEADQUARTERED_IN", "CERTIFIED_BY", "MANUFACTURES", "COMPETES_WITH"
+  relationshipType String @map("relationship_type")
+  confidenceScore  Float  @default(0) @map("confidence_score")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain      BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  source     BrainSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  fromEntity BrainEntity   @relation("BrainRelationshipFromEntity", fields: [fromEntityId], references: [id], onDelete: Cascade)
+  toEntity   BrainEntity   @relation("BrainRelationshipToEntity", fields: [toEntityId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([brainId])
+  @@index([fromEntityId])
+  @@index([toEntityId])
+  @@map("brain_relationships")
+}
+
+/// An atomic piece of knowledge. Every fact carries its own workspaceId
+/// (queryable without a join through BusinessBrain), a bounded factType, the
+/// value itself, where it came from, and two distinct scores: confidence is
+/// about extraction accuracy at the time it was captured, freshness is about
+/// how current it likely still is (decays since lastVerifiedAt; recalculated
+/// by BrainUpdateRun).
+model BrainFact {
+  id          String  @id @default(cuid())
+  workspaceId String  @map("workspace_id")
+  brainId     String  @map("brain_id")
+  sourceId    String? @map("source_id")
+  entityId    String? @map("entity_id")
+
+  factType  BrainFactType @map("fact_type")
+  factValue String        @map("fact_value")
+
+  /// Direct convenience copy of where this fact came from; the fuller source
+  /// record (fetch time, type, etc.) is on `source` when `sourceId` is set.
+  sourceUrl String? @map("source_url")
+
+  confidenceScore Float     @default(0) @map("confidence_score")
+  lastVerifiedAt  DateTime? @map("last_verified_at")
+  /// 0-1; 1 is just-verified, decaying toward 0 the longer it goes unverified.
+  freshnessScore  Float     @default(1) @map("freshness_score")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain     BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  source    BrainSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  entity    BrainEntity?  @relation(fields: [entityId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, factType])
+  @@index([brainId])
+  @@index([sourceId])
+  @@index([entityId])
+  @@map("brain_facts")
+}
+
+/// History of refresh operations that populate a BusinessBrain — analogous
+/// to WebsiteAnalysis's run-history pattern. Lets the brain be rebuilt
+/// incrementally and gives an audit trail of what changed and why.
+model BrainUpdateRun {
+  id          String @id @default(cuid())
+  workspaceId String @map("workspace_id")
+  brainId     String @map("brain_id")
+
+  status  BrainUpdateRunStatus @default(PENDING)
+  trigger BrainUpdateTrigger   @default(MANUAL)
+
+  factsCreated Int @default(0) @map("facts_created")
+  factsUpdated Int @default(0) @map("facts_updated")
+  factsExpired Int @default(0) @map("facts_expired")
+
+  /// Set when status is FAILED.
+  error String?
+
+  triggeredByUserId String? @map("triggered_by_user_id")
+
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain       BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  triggeredBy User?         @relation("BrainUpdateRunTriggeredBy", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([brainId])
+  @@index([status])
+  @@map("brain_update_runs")
 }

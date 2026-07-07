@@ -25,6 +25,7 @@ Multi-tenant schema defined in [`prisma/schema.prisma`](prisma/schema.prisma):
 - **WebsiteAnalysis** — raw result of analyzing a workspace's homepage (see [Website Analyzer](#website-analyzer)).
 - **CompanyProfile** — AI-extracted company profile built from a `WebsiteAnalysis` (see [Company Profile](#company-profile-ai-extraction)).
 - **ProductService** — AI-discovered product/service catalog entries built from a `WebsiteAnalysis` (see [Product/Service Discovery](#productservice-discovery-ai-extraction)).
+- **BusinessBrain**, **BrainFact**, **BrainSource**, **BrainEntity**, **BrainRelationship**, **BrainUpdateRun** — a per-workspace knowledge base (schema only so far — see [AI Business Brain](#ai-business-brain-schema)).
 
 Soft delete (`deletedAt`) is used on entities users can remove (User, Workspace, WorkspaceMember, Subscription). `Plan` and `Role` are reference/config data — retire with `isActive`/`isSystem` flags instead of deleting, since Subscriptions and memberships reference them. The three log tables (`UsageLog`, `ApiCostLog`, `AuditLog`) are append-only: no `updatedAt` or `deletedAt`, since rows are written once and never mutated.
 
@@ -104,6 +105,18 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 - **Review screen** (`src/components/product-discovery/product-service-card.tsx`, rendered at both `/dashboard/products` and `/onboarding/review-products`): one card per record, each independently editable (**Save changes**) and independently **Approve** / **Reject** / **Delete** — ownership-checked server-side (`requireOwnedProductService`) so an id from one workspace can't be used to touch another's rows. Gated by `canEditProductCatalog()` (same roles as Company Profile).
 - **Wiring**: `startAnalysis()` (onboarding) calls `generateProductServices()` best-effort after company profile generation, then onboarding advances through the review-profile and review-products steps before completing (see [Onboarding](#onboarding)). The dashboard overview shows the **approved** count as the headline number, with a separate badge for how many are still pending review.
 - Uses the same `ANTHROPIC_API_KEY` as Company Profile.
+
+## AI Business Brain (schema)
+
+A per-workspace knowledge base intended to eventually aggregate everything this app learns about a company — website analysis, company profile, product catalog, and future sources — into queryable facts and a lightweight entity graph. **Schema only so far**: the six models below are defined and migrated, but there's no extraction/service/UI layer yet (that's future work — see `prisma/schema.prisma` for the full field list and doc comments).
+
+- **BusinessBrain** — the aggregate root, one per workspace (`status`: `INITIALIZING` / `ACTIVE` / `STALE`). Every other model below hangs off a `brainId`, and also carries `workspaceId` directly so it's queryable without a join.
+- **BrainFact** — an atomic piece of knowledge. Stores exactly what was asked for: `workspaceId`, `factType` (a bounded enum — company name, industry, headquarters, certification, financial, etc., with an `OTHER` escape hatch), `factValue`, `sourceUrl`, `confidenceScore`, `lastVerifiedAt`, and `freshnessScore` (0-1, decays the longer a fact goes unverified — distinct from `confidenceScore`, which is about extraction accuracy at capture time, not recency). Optionally links to the `BrainSource` and `BrainEntity` it came from/is about.
+- **BrainSource** — where a piece of knowledge came from (`sourceType`: website page / document / manual entry / third-party API), optionally traceable back to the `WebsiteAnalysis` run that produced it.
+- **BrainEntity** — a named "node" the brain has identified (organization, person, product, location, certification, industry). `BrainFact` can attach to the entity it's about.
+- **BrainRelationship** — a directed edge between two `BrainEntity` rows (`fromEntityId` → `toEntityId`), e.g. "Acme Corp" —`CERTIFIED_BY`→ "ISO 9001". `relationshipType` is free text (open-ended vocabulary), unlike the closed `factType`/`entityType`/`sourceType` enums.
+- **BrainUpdateRun** — history of refresh operations (status, trigger, facts created/updated/expired, optional `triggeredByUserId`), the same run-history pattern as `WebsiteAnalysis`.
+- **Cascade rules** (verified against a live DB): deleting a `BrainSource` or `BrainEntity` that a fact/relationship merely *references* sets that reference to `null` rather than deleting the fact/relationship; deleting an entity that's the `fromEntity`/`toEntity` of a relationship cascades and removes that relationship; deleting the workspace cascades through the entire graph.
 
 ## Dashboard layout & UI components
 
