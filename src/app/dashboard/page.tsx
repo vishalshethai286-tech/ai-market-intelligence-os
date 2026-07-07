@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { requireActiveWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
 import { getLatestAnalysis } from "@/lib/website-analysis";
+import { getCompanyProfile } from "@/lib/company-profile/service";
 import { canInviteMembers } from "@/lib/access-control";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,11 +17,12 @@ export default async function DashboardPage() {
 
   const active = await requireActiveWorkspace();
 
-  const [memberCount, latestAnalysis] = await Promise.all([
+  const [memberCount, latestAnalysis, companyProfile] = await Promise.all([
     prisma.workspaceMember.count({
       where: { workspaceId: active.workspace.id, deletedAt: null },
     }),
     getLatestAnalysis(active.workspace.id),
+    getCompanyProfile(active.workspace.id),
   ]);
 
   const identifiedPageCount = latestAnalysis?.identifiedPages
@@ -85,6 +87,30 @@ export default async function DashboardPage() {
             {latestAnalysis?.status === "RUNNING" && (
               <p className="text-sm text-black/50 dark:text-white/50">Fetching homepage...</p>
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Company Profile</CardTitle>
+              {companyProfile?.status === "APPROVED" && <Badge variant="success">Approved</Badge>}
+              {companyProfile?.status === "PENDING_REVIEW" && <Badge variant="warning">Needs review</Badge>}
+            </div>
+            <CardDescription>{companyProfile?.companyName || "Not generated yet"}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-black/50 dark:text-white/50">
+              {companyProfile
+                ? `${companyProfile.industry || "Industry unclear"} · ${Math.round(companyProfile.confidenceScore * 100)}% confidence`
+                : "Generate a profile from your website analysis."}
+            </p>
+            <Link
+              href="/dashboard/company-profile"
+              className="mt-1 inline-block text-sm text-black/50 hover:text-current dark:text-white/50"
+            >
+              {companyProfile ? "Review profile" : "Get started"} &rarr;
+            </Link>
           </CardContent>
         </Card>
 

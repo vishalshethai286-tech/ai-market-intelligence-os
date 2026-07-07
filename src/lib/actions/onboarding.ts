@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateOnboarding, requireOnboardingStep, stepPath } from "@/lib/onboarding";
 import { canStartNewAnalysis, runAndStoreWebsiteAnalysis } from "@/lib/website-analysis";
+import { generateCompanyProfile } from "@/lib/company-profile/service";
 import {
   CountriesSchema,
   CustomerTypesSchema,
@@ -106,8 +107,9 @@ export async function startAnalysis() {
   if (onboarding.companyWebsite && (await canStartNewAnalysis(active.workspace.id))) {
     try {
       await runAndStoreWebsiteAnalysis(active.workspace.id, onboarding.companyWebsite);
+      await generateCompanyProfile(active.workspace.id);
     } catch {
-      // Analysis is best-effort enrichment — don't block onboarding on it.
+      // Analysis and profile extraction are best-effort enrichment — don't block onboarding on them.
     }
   }
 

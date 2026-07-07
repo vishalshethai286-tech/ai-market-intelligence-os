@@ -13,6 +13,7 @@ export const siteConfig = {
 export const dashboardNav = [
   { label: "Overview", href: "/dashboard" },
   { label: "Market Signals", href: "/dashboard/signals" },
+  { label: "Company Profile", href: "/dashboard/company-profile" },
   { label: "Reports", href: "/dashboard/reports" },
   { label: "Settings", href: "/dashboard/settings" },
 ] as const;
