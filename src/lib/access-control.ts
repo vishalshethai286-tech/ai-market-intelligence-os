@@ -19,6 +19,7 @@ const MEMBER_INVITER_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN];
 const BILLING_MANAGER_ROLES: readonly string[] = [ROLES.OWNER];
 const COMPANY_PROFILE_EDITOR_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN, ROLES.SALES_USER];
 const PRODUCT_CATALOG_EDITOR_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN, ROLES.SALES_USER];
+const BRAIN_FACT_REVIEWER_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN, ROLES.SALES_USER];
 
 export function isOwner(role: string): boolean {
   return role === ROLES.OWNER;
@@ -47,6 +48,11 @@ export function canEditCompanyProfile(role: string): boolean {
 /** Edit, regenerate, approve/reject, or delete AI-discovered product/service records. Viewers are read-only. */
 export function canEditProductCatalog(role: string): boolean {
   return PRODUCT_CATALOG_EDITOR_ROLES.includes(role);
+}
+
+/** Mark AI Business Brain facts as correct/incorrect/needs review. Viewers are read-only. */
+export function canReviewBrainFacts(role: string): boolean {
+  return BRAIN_FACT_REVIEWER_ROLES.includes(role);
 }
 
 /** Only an OWNER can remove another OWNER; any manager can remove everyone else. */

@@ -3,7 +3,48 @@ import { prisma } from "@/lib/prisma";
 import { identifyCompetitors } from "./competitors";
 import { OPERATION_TYPE_LABELS } from "@/lib/company-profile/constants";
 import { TARGET_COUNTRIES } from "@/config/onboarding";
-import type { Prisma } from "@/generated/prisma/client";
+import type { Prisma, BrainFactVerificationStatus } from "@/generated/prisma/client";
+
+export class BrainFactNotFoundError extends Error {}
+
+export function getBusinessBrain(workspaceId: string) {
+  return prisma.businessBrain.findUnique({ where: { workspaceId } });
+}
+
+/** All facts for a workspace's brain, grouped for display by the page (which buckets by factType). */
+export function listBrainFacts(workspaceId: string) {
+  return prisma.brainFact.findMany({
+    where: { workspaceId },
+    orderBy: [{ factType: "asc" }, { createdAt: "asc" }],
+  });
+}
+
+/**
+ * Records a human's correct/incorrect/needs-review judgment on a fact.
+ * Marking CORRECT is itself an act of verification, so it also bumps
+ * `lastVerifiedAt`/`freshnessScore` — a human confirming a fact is accurate
+ * is strictly stronger evidence than the automatic decay clock.
+ */
+export async function markFactVerification(
+  workspaceId: string,
+  factId: string,
+  userId: string,
+  status: BrainFactVerificationStatus,
+) {
+  const existing = await prisma.brainFact.findFirst({ where: { id: factId, workspaceId } });
+  if (!existing) {
+    throw new BrainFactNotFoundError("That fact doesn't exist in this workspace.");
+  }
+
+  return prisma.brainFact.update({
+    where: { id: factId },
+    data: {
+      verificationStatus: status,
+      verifiedByUserId: userId,
+      ...(status === "CORRECT" ? { lastVerifiedAt: new Date(), freshnessScore: 1 } : {}),
+    },
+  });
+}
 
 function countryName(code: string): string {
   return TARGET_COUNTRIES.find((c) => c.code === code)?.name ?? code;
@@ -262,6 +303,15 @@ export async function buildInitialBrain(workspaceId: string) {
             relationshipType: "COMPETES_WITH",
             confidenceScore: competitor.confidenceScore,
           },
+        });
+        factRows.push({
+          ...baseFact,
+          sourceId: null,
+          sourceUrl: null,
+          entityId: competitorEntity.id,
+          factType: "COMPETITOR",
+          factValue: competitor.name,
+          confidenceScore: competitor.confidenceScore,
         });
       }
 

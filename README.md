@@ -113,7 +113,7 @@ A per-workspace knowledge base that aggregates everything this app learns about 
 ### Schema
 
 - **BusinessBrain** — the aggregate root, one per workspace (`status`: `INITIALIZING` / `ACTIVE` / `STALE`). Every other model below hangs off a `brainId`, and also carries `workspaceId` directly so it's queryable without a join.
-- **BrainFact** — an atomic piece of knowledge: `workspaceId`, `factType` (a bounded enum — company name, industry, headquarters, certification, financial, etc., with an `OTHER` escape hatch), `factValue`, `sourceUrl`, `confidenceScore`, `lastVerifiedAt`, and `freshnessScore` (0-1, decays the longer a fact goes unverified — distinct from `confidenceScore`, which is about extraction accuracy at capture time, not recency). Optionally links to the `BrainSource` and `BrainEntity` it came from/is about.
+- **BrainFact** — an atomic piece of knowledge: `workspaceId`, `factType` (a bounded enum — company name, industry, headquarters, certification, competitor, financial, etc., with an `OTHER` escape hatch), `factValue`, `sourceUrl`, `confidenceScore`, `lastVerifiedAt`, and `freshnessScore` (0-1, decays the longer a fact goes unverified — distinct from `confidenceScore`, which is about extraction accuracy at capture time, not recency). Optionally links to the `BrainSource` and `BrainEntity` it came from/is about. `verificationStatus` (`UNVERIFIED` / `CORRECT` / `INCORRECT` / `NEEDS_REVIEW`) plus `verifiedByUserId` records a human's judgment — the one dimension only a person can set, distinct from both scores above.
 - **BrainSource** — where a piece of knowledge came from (`sourceType`: website page / document / manual entry / third-party API), optionally traceable back to the `WebsiteAnalysis` run that produced it.
 - **BrainEntity** — a named "node" the brain has identified (organization, person, product, location, certification, industry). `BrainFact` can attach to the entity it's about.
 - **BrainRelationship** — a directed edge between two `BrainEntity` rows (`fromEntityId` → `toEntityId`), e.g. "Acme Corp" —`CERTIFIED_BY`→ "ISO 9001". `relationshipType` is free text (open-ended vocabulary), unlike the closed `factType`/`entityType`/`sourceType` enums.
@@ -128,10 +128,14 @@ A per-workspace knowledge base that aggregates everything this app learns about 
 - **Products/services** (every non-`REJECTED` row — approval isn't required, since a user may finish onboarding without approving everything) → one `BrainEntity`(`PRODUCT`) + `OFFERS` relationship and one `PRODUCT_OR_SERVICE` fact per item.
 - **Industries, buyer types, search keywords** → deduped (case-insensitively) across all included products into `TARGET_INDUSTRY` / `BUYER_TYPE` / `KEYWORD` facts.
 - **Target countries** → deduped union of the company profile's `countriesServed` and the onboarding wizard's selected target countries (mapped from ISO codes to names), as `COUNTRY_SERVED` facts.
-- **Competitors, if known** (`src/lib/business-brain/competitors.ts`) — one Claude call (`claude-opus-4-8`, structured outputs) given the aggregated profile, asking it to name only competitors it has genuine knowledge of. Returns an empty list rather than guessing, and **fails open** (catches its own errors, including a missing/invalid `ANTHROPIC_API_KEY`) so a competitor-lookup failure never blocks the rest of the brain from being built. Each identified competitor becomes a `BrainEntity`(`ORGANIZATION`) + `COMPETES_WITH` relationship.
+- **Competitors, if known** (`src/lib/business-brain/competitors.ts`) — one Claude call (`claude-opus-4-8`, structured outputs) given the aggregated profile, asking it to name only competitors it has genuine knowledge of. Returns an empty list rather than guessing, and **fails open** (catches its own errors, including a missing/invalid `ANTHROPIC_API_KEY`) so a competitor-lookup failure never blocks the rest of the brain from being built. Each identified competitor becomes a `BrainEntity`(`ORGANIZATION`) + `COMPETES_WITH` relationship + a `COMPETITOR` `BrainFact` (so competitors are reviewable in the UI exactly like every other fact).
 - Every fact/entity/relationship from this run shares one `BrainSource` pointing at the workspace's latest completed `WebsiteAnalysis`, so everything traces back to where it came from.
 - **Idempotent**: if the workspace's brain is already populated (`status` ≠ `INITIALIZING`), calling this again is a no-op — it builds the *initial* brain once. If a previous attempt failed partway, the brain stays `INITIALIZING` so the next call retries instead of returning permanently empty. Population happens in a single transaction, so a failure can't leave a half-built graph.
 - **Wiring**: `completeOnboarding()` calls this best-effort right before marking onboarding `COMPLETED`, same non-blocking convention as the rest of onboarding's enrichment steps.
+
+### Review page
+
+`/dashboard/business-brain` (`src/app/dashboard/business-brain/page.tsx`) groups every `BrainFact` into six sections — **Company summary, Products & services, Target industries, Buyer personas, Keywords, Competitors** — driven purely by `factType`, so a section simply doesn't render if it has no facts. Each fact row (`src/components/business-brain/fact-row.tsx`) shows the fact value, confidence score, source URL, and last-verified date, plus **Correct** / **Incorrect** / **Needs review** buttons that call `markFactVerificationAction()` — ownership-checked server-side, gated by `canReviewBrainFacts()` (same roles as Company Profile/Products). Marking a fact **Correct** also bumps its `lastVerifiedAt`/`freshnessScore`, since a human confirming a fact is itself an act of verification.
 
 ## Dashboard layout & UI components
 
@@ -178,6 +182,7 @@ src/
       workspaces/new/    Create-workspace page
       company-profile/   /dashboard/company-profile — page.tsx only, form lives in components/
       products/          /dashboard/products — page.tsx only, cards live in components/
+      business-brain/    /dashboard/business-brain — company summary, catalog, industries, buyer personas, keywords, competitors
     onboarding/
       layout.tsx         Onboarding shell (logo, logout, centered content)
       page.tsx           Redirects to the workspace's current step
@@ -190,6 +195,7 @@ src/
     onboarding/           Step progress indicator
     company-profile/      CompanyProfileForm/ApproveButton/RegenerateButton — shared by dashboard + onboarding
     product-discovery/    ProductServiceCard/RegenerateButton — shared by dashboard + onboarding
+    business-brain/       FactRow — value, confidence, source URL, last verified date, verification buttons
     ui/                   Reusable primitives: Button, Input, Textarea, Label, Select, Checkbox, Badge, Card, Table, FieldError
   config/
     site.ts              Site name, nav links, dashboard nav
@@ -205,12 +211,13 @@ src/
     website-analyzer/      SSRF guard, robots.txt check, safe fetch, HTML parse, page classifier
     company-profile/       AI extraction (Claude, structured outputs) + DB-integrated service
     product-discovery/     Bounded multi-page fetch + AI extraction (Claude, structured outputs) + DB-integrated service
-    business-brain/        buildInitialBrain() — synthesizes profile/products/countries into facts + entities + relationships
+    business-brain/        buildInitialBrain() — synthesizes profile/products/countries into facts + entities + relationships; getBusinessBrain/listBrainFacts/markFactVerification
     actions/auth.ts        Server actions: signup, login, logout, requestPasswordReset
     actions/workspace.ts   Server actions: createWorkspace, switchWorkspace, renameWorkspace, inviteMember
     actions/onboarding.ts  Server actions: one save action per step, startAnalysis
     actions/company-profile.ts  Server actions: regenerate, update, approve
     actions/product-discovery.ts  Server actions: regenerate, update, approve, reject, delete
+    actions/business-brain.ts  Server action: markFactVerificationAction
     validations/auth.ts    Zod schemas for signup/login forms
     validations/workspace.ts  Zod schemas for workspace name / invite forms
     validations/onboarding.ts Zod schemas for each onboarding step
@@ -297,3 +304,4 @@ scripts/
 - The company-profile extraction call (`src/lib/company-profile/extract.ts`) was verified against the local DB (upsert/update/approve/regenerate logic, cascade deletes) but not against a live Claude API call — no `ANTHROPIC_API_KEY` was available in this environment. Set one in `.env` locally and in Vercel's env vars before relying on it in production.
 - Same caveat for product/service discovery (`src/lib/product-discovery/extract.ts`) — the create/update/approve/reject/delete/regenerate-preserves-approved logic was verified against the local DB, and the bounded multi-page fetch (`fetch-pages.ts`) is a thin, already-typechecked composition of the website analyzer's live-verified SSRF guard/robots-check/safe-fetch, but the actual Claude call is untested without `ANTHROPIC_API_KEY`.
 - `buildInitialBrain()` (`src/lib/business-brain/service.ts`) was verified end-to-end through the real running app (seeded an approved profile + mixed-status products, ran onboarding's Finish step, confirmed the fact/entity/relationship counts and dedup by querying the DB directly) — but without `ANTHROPIC_API_KEY`, `identifyCompetitors()` fails open and every brain built so far has zero competitors. That's by design (fail-open, not a required step) but means the competitor path itself hasn't been exercised against a real response.
+- The `/dashboard/business-brain` review page was verified live in the browser (seeded a full fact set including a competitor, marked facts Correct/Incorrect and confirmed the badge/button state updates and persists on reload) at mobile, tablet-width, and desktop viewports — the fact-row layout deliberately stacks unconditionally (value, then metadata, then status/buttons) rather than switching to a side-by-side row at a breakpoint, since the sidebar's width means the usable content column is narrower than the raw viewport width would suggest.

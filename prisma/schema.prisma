@@ -74,6 +74,7 @@ model User {
   approvedCompanyProfiles  CompanyProfile[]  @relation("CompanyProfileApprovedBy")
   approvedProductServices  ProductService[]  @relation("ProductServiceApprovedBy")
   triggeredBrainUpdateRuns BrainUpdateRun[]  @relation("BrainUpdateRunTriggeredBy")
+  verifiedBrainFacts       BrainFact[]       @relation("BrainFactVerifiedBy")
 
   @@index([deletedAt])
   @@map("users")
@@ -569,7 +570,18 @@ enum BrainFactType {
   CONTACT_INFO
   FINANCIAL
   LEADERSHIP
+  COMPETITOR
   OTHER
+}
+
+/// A human's judgment on whether a fact is still accurate. Distinct from
+/// confidenceScore (extraction accuracy at capture time) and freshnessScore
+/// (automatic decay) — this is the one dimension only a person can set.
+enum BrainFactVerificationStatus {
+  UNVERIFIED
+  CORRECT
+  INCORRECT
+  NEEDS_REVIEW
 }
 
 enum BrainEntityType {
@@ -745,13 +757,20 @@ model BrainFact {
   /// 0-1; 1 is just-verified, decaying toward 0 the longer it goes unverified.
   freshnessScore  Float     @default(1) @map("freshness_score")
 
+  /// A human's correct/incorrect/needs-review judgment. Marking CORRECT also
+  /// bumps lastVerifiedAt/freshnessScore — a human confirming a fact IS a
+  /// verification, not a separate concept.
+  verificationStatus BrainFactVerificationStatus @default(UNVERIFIED) @map("verification_status")
+  verifiedByUserId   String?                     @map("verified_by_user_id")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  brain     BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
-  source    BrainSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
-  entity    BrainEntity?  @relation(fields: [entityId], references: [id], onDelete: SetNull)
+  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain      BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  source     BrainSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  entity     BrainEntity?  @relation(fields: [entityId], references: [id], onDelete: SetNull)
+  verifiedBy User?         @relation("BrainFactVerifiedBy", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, factType])
   @@index([brainId])
