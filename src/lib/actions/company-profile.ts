@@ -13,7 +13,15 @@ import {
 import { ExtractionError } from "@/lib/company-profile/extract";
 import { CompanyProfileSchema, toList, type CompanyProfileFormState } from "@/lib/validations/company-profile";
 
-const PROFILE_PATH = "/dashboard/company-profile";
+// Revalidated everywhere a profile can be viewed/edited: the dashboard page
+// (which shows the approved profile's summary) and both routes that render
+// this action's result — the dashboard review screen and the onboarding
+// review step.
+const PROFILE_PATHS = ["/dashboard", "/dashboard/company-profile", "/onboarding/review-profile"];
+
+function revalidateProfilePaths() {
+  for (const path of PROFILE_PATHS) revalidatePath(path);
+}
 
 export async function regenerateCompanyProfileAction(): Promise<{ error?: string } | undefined> {
   const active = await requireActiveWorkspace();
@@ -33,7 +41,7 @@ export async function regenerateCompanyProfileAction(): Promise<{ error?: string
     return { error: "Couldn't generate a profile right now. Please try again." };
   }
 
-  revalidatePath(PROFILE_PATH);
+  revalidateProfilePaths();
 }
 
 export async function updateCompanyProfileAction(
@@ -61,7 +69,7 @@ export async function updateCompanyProfileAction(
   }
 
   await updateCompanyProfile(active.workspace.id, validatedFields.data);
-  revalidatePath(PROFILE_PATH);
+  revalidateProfilePaths();
   return { message: "Changes saved." };
 }
 
@@ -77,5 +85,5 @@ export async function approveCompanyProfileAction(): Promise<{ error?: string } 
   }
 
   await approveCompanyProfile(active.workspace.id, session.user.id);
-  revalidatePath(PROFILE_PATH);
+  revalidateProfilePaths();
 }

@@ -102,19 +102,32 @@ export default async function DashboardPage() {
               {companyProfile?.status === "APPROVED" && <Badge variant="success">Approved</Badge>}
               {companyProfile?.status === "PENDING_REVIEW" && <Badge variant="warning">Needs review</Badge>}
             </div>
-            <CardDescription>{companyProfile?.companyName || "Not generated yet"}</CardDescription>
+            <CardDescription>
+              {companyProfile?.status === "APPROVED"
+                ? companyProfile.companyName || "Approved"
+                : companyProfile
+                  ? "Draft ready for review"
+                  : "Not generated yet"}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-black/50 dark:text-white/50">
-              {companyProfile
+              {companyProfile?.status === "APPROVED"
                 ? `${companyProfile.industry || "Industry unclear"} · ${Math.round(companyProfile.confidenceScore * 100)}% confidence`
-                : "Generate a profile from your website analysis."}
+                : companyProfile
+                  ? "Finish reviewing the AI-generated draft to approve it."
+                  : "Generate a profile from your website analysis."}
             </p>
             <Link
               href="/dashboard/company-profile"
               className="mt-1 inline-block text-sm text-black/50 hover:text-current dark:text-white/50"
             >
-              {companyProfile ? "Review profile" : "Get started"} &rarr;
+              {companyProfile?.status === "APPROVED"
+                ? "Review profile"
+                : companyProfile
+                  ? "Finish review"
+                  : "Get started"}{" "}
+              &rarr;
             </Link>
           </CardContent>
         </Card>
@@ -126,17 +139,17 @@ export default async function DashboardPage() {
               {pendingProductCount > 0 && <Badge variant="warning">{pendingProductCount} to review</Badge>}
             </div>
             <CardDescription>
-              {productServices.length > 0
-                ? `${approvedProductCount} approved · ${productServices.length} total`
-                : "Not discovered yet"}
+              {productServices.length > 0 ? "Approved catalog" : "Not discovered yet"}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-black/50 dark:text-white/50">
-              {productServices.length > 0
-                ? "AI-discovered catalog from your website content."
-                : "Discover products and services from your website content."}
-            </p>
+            {productServices.length > 0 ? (
+              <p className="text-2xl font-semibold tracking-tight">{approvedProductCount}</p>
+            ) : (
+              <p className="text-sm text-black/50 dark:text-white/50">
+                Discover products and services from your website content.
+              </p>
+            )}
             <Link
               href="/dashboard/products"
               className="mt-1 inline-block text-sm text-black/50 hover:text-current dark:text-white/50"

@@ -32,4 +32,6 @@ export const ONBOARDING_STEPS = [
   { step: 3, slug: "countries", label: "Target countries" },
   { step: 4, slug: "customer-types", label: "Customer types" },
   { step: 5, slug: "start", label: "Start analysis" },
+  { step: 6, slug: "review-profile", label: "Review company profile" },
+  { step: 7, slug: "review-products", label: "Review products & services" },
 ] as const;

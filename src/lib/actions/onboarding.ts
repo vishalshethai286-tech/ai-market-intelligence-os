@@ -99,8 +99,9 @@ export async function saveCustomerTypesStep(
 
 /**
  * Kicks off the website analyzer for the workspace's homepage (best-effort —
- * a failed fetch doesn't block onboarding), marks onboarding complete, and
- * sends the user to the dashboard.
+ * a failed fetch doesn't block onboarding), generates a company profile and
+ * product/service catalog from it, then sends the user to review what was
+ * found rather than finishing onboarding outright.
  */
 export async function startAnalysis() {
   const { active, onboarding } = await requireOnboardingStep("start");
@@ -114,6 +115,21 @@ export async function startAnalysis() {
       // Analysis, profile extraction, and product discovery are best-effort enrichment — don't block onboarding on them.
     }
   }
+
+  await saveStep(active.workspace.id, {}, 6);
+  redirect(stepPath("review-profile"));
+}
+
+/** Advances from the company-profile review step to the product/service review step. */
+export async function continueToReviewProducts() {
+  const { active } = await requireOnboardingStep("review-profile");
+  await saveStep(active.workspace.id, {}, 7);
+  redirect(stepPath("review-products"));
+}
+
+/** Final onboarding step: marks the workspace onboarded and sends the user to the dashboard. */
+export async function completeOnboarding() {
+  const { active } = await requireOnboardingStep("review-products");
 
   await prisma.workspaceOnboarding.update({
     where: { workspaceId: active.workspace.id },

@@ -59,9 +59,13 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 2. `/onboarding/email` — work email (prefilled from the session user's email)
 3. `/onboarding/countries` — target countries (multi-select checkboxes, see `src/config/onboarding.ts` for the list)
 4. `/onboarding/customer-types` — customer types (B2B, B2C, Enterprise, SMB, Startups, Government)
-5. `/onboarding/start` — review + **Start analysis**, which runs the [Website Analyzer](#website-analyzer) against the company website (best-effort — a failed fetch doesn't block onboarding), then marks onboarding `COMPLETED` and sends the user to `/dashboard`
+5. `/onboarding/start` — review + **Start analysis**, which runs the [Website Analyzer](#website-analyzer) against the company website (best-effort — a failed fetch doesn't block onboarding), generates a [Company Profile](#company-profile-ai-extraction) and runs [Product/Service Discovery](#productservice-discovery-ai-extraction) from it, then advances to step 6 instead of finishing
+6. `/onboarding/review-profile` — the AI-generated company profile, fully editable, with **Approve** and **Regenerate** — reuses the same `CompanyProfileForm` as the dashboard. **Continue** advances to step 7 regardless of whether the profile was approved (review can be finished later from the dashboard).
+7. `/onboarding/review-products` — the AI-discovered product/service catalog, one card per record with edit/**Approve**/**Reject**/**Delete** — reuses the same `ProductServiceCard` as the dashboard. **Finish and go to dashboard** marks onboarding `COMPLETED` and redirects to `/dashboard`.
 
-- **Progress persistence**: `WorkspaceOnboarding.currentStep` tracks the furthest step reached, so a user who drops off resumes exactly where they left off (`/onboarding` redirects there), and can't skip ahead by guessing a URL — `requireOnboardingStep()` in `src/lib/onboarding.ts` bounces them back to their actual step.
+- **Best-effort generation, required review step**: if analysis, profile extraction, or discovery fails (caught in `startAnalysis()`), onboarding still advances to step 6 — the review pages show a "couldn't generate" message with a **Try again** button rather than blocking the wizard.
+- **Shared components, two routes**: `CompanyProfileForm`/`ApproveButton`/`RegenerateButton` (`src/components/company-profile/`) and `ProductServiceCard`/`RegenerateButton` (`src/components/product-discovery/`) are used unmodified by both the onboarding review steps and the dashboard review screens (`/dashboard/company-profile`, `/dashboard/products`). Their server actions revalidate all three surfaces (`/dashboard`, the dashboard review screen, the onboarding review step) so an edit made in either place shows up immediately in the other.
+- **Progress persistence**: `WorkspaceOnboarding.currentStep` tracks the furthest step reached (now 1-7), so a user who drops off resumes exactly where they left off (`/onboarding` redirects there), and can't skip ahead by guessing a URL — `requireOnboardingStep()` in `src/lib/onboarding.ts` bounces them back to their actual step.
 - **Gating**: signup and "create workspace" redirect to `/onboarding` instead of `/dashboard`; `dashboard/layout.tsx` redirects back to `/onboarding` if the active workspace's onboarding isn't `COMPLETED`. Each workspace's onboarding is independent — switching to an already-onboarded workspace goes straight to the dashboard.
 
 ## Website Analyzer
@@ -85,8 +89,8 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 - **Extracted fields**: company name, business description, industry, business model, countries served, headquarters, operation type (`MANUFACTURER` / `TRADER` / `SERVICE_PROVIDER` / `OTHER` / `UNKNOWN`), certifications, key products/services, and a 0-1 confidence score. `sourceUrls` is set programmatically to the analyzed homepage URL (the model doesn't get to invent sources).
 - **`extractCompanyProfile(analysis)`** (`extract.ts`) builds the prompt from the analysis's title/meta description/headings/visible text/classified links (`prompt.ts`), calls Claude with adaptive thinking + `effort: "medium"`, and validates the response shape defensively even though structured outputs already guarantees it. Throws `ExtractionError` on a safety refusal, truncated (`max_tokens`) response, or malformed JSON.
 - **`generateCompanyProfile(workspaceId)`** (`service.ts`) is the DB-integrated entry point: finds the latest `COMPLETED` analysis (throws `NoAnalysisError` if there isn't one), runs extraction, and **upserts** — one `CompanyProfile` row per workspace, not history. Regenerating always resets `status` to `PENDING_REVIEW`, even if the previous draft was approved. The model's raw output for that run is kept in `aiRawExtraction` as an audit trail, untouched by later user edits.
-- **Review screen** (`/dashboard/company-profile`): every field is editable (array fields as comma-separated text inputs); **Save changes** persists edits without touching approval status; **Approve profile** sets `status: APPROVED` + `approvedAt`/`approvedByUserId`; **Regenerate** re-runs extraction from scratch. Editing/approving is gated by `canEditCompanyProfile()` (`OWNER`/`ADMIN`/`SALES_USER` — `VIEWER` is read-only).
-- **Wiring**: `startAnalysis()` (onboarding) calls `generateCompanyProfile()` best-effort right after the website analysis, same non-blocking convention as the analysis itself. The dashboard overview shows a Company Profile card with status + confidence.
+- **Review screen** (`src/components/company-profile/company-profile-form.tsx`, rendered at both `/dashboard/company-profile` and `/onboarding/review-profile`): every field is editable (array fields as comma-separated text inputs); **Save changes** persists edits without touching approval status; **Approve profile** sets `status: APPROVED` + `approvedAt`/`approvedByUserId`; **Regenerate** re-runs extraction from scratch. Editing/approving is gated by `canEditCompanyProfile()` (`OWNER`/`ADMIN`/`SALES_USER` — `VIEWER` is read-only).
+- **Wiring**: `startAnalysis()` (onboarding) calls `generateCompanyProfile()` best-effort right after the website analysis, then advances onboarding to the review-profile step instead of finishing (see [Onboarding](#onboarding)). The dashboard overview only shows a name/industry/confidence summary once the profile is `APPROVED` — an unapproved draft shows a "finish review" prompt instead.
 - Requires `ANTHROPIC_API_KEY` in `.env` (and in Vercel's env vars for production) — see [Local setup](#local-setup).
 
 ## Product/Service Discovery (AI extraction)
@@ -97,8 +101,8 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 - **Extracted fields**: name, category, subcategory, description, applications, target industries, buyer types, keywords, and a 0-1 confidence score, per product/service. `sourceUrls` is **schema-constrained** to an enum of the URLs actually fetched for that run (`schema.ts` builds the JSON Schema per-call from that list) — the model can cite a page it was given, never invent one.
 - **`extractProductServices(pages)`** (`extract.ts`) calls Claude (`claude-opus-4-8`, structured outputs, adaptive thinking, `effort: "high"`) with all fetched pages in one prompt, asking it to merge duplicates that appear on multiple pages into a single record (citing every page it appears on) and cap the result at 20 items. Throws `DiscoveryError` on refusal, truncation, or malformed JSON.
 - **`generateProductServices(workspaceId)`** (`service.ts`): finds the latest `COMPLETED` analysis, fetches the extra pages, runs extraction, then in one transaction deletes every **non-`APPROVED`** row for the workspace and inserts the fresh batch. `APPROVED` rows are never touched by a regenerate — approval is treated as a finalized human decision, not a draft.
-- **Review screen** (`/dashboard/products`): one card per record, each independently editable (**Save changes**) and independently **Approve** / **Reject** / **Delete** — ownership-checked server-side (`requireOwnedProductService`) so an id from one workspace can't be used to touch another's rows. Gated by `canEditProductCatalog()` (same roles as Company Profile).
-- **Wiring**: `startAnalysis()` (onboarding) calls `generateProductServices()` best-effort after company profile generation. The dashboard overview shows an approved/pending count.
+- **Review screen** (`src/components/product-discovery/product-service-card.tsx`, rendered at both `/dashboard/products` and `/onboarding/review-products`): one card per record, each independently editable (**Save changes**) and independently **Approve** / **Reject** / **Delete** — ownership-checked server-side (`requireOwnedProductService`) so an id from one workspace can't be used to touch another's rows. Gated by `canEditProductCatalog()` (same roles as Company Profile).
+- **Wiring**: `startAnalysis()` (onboarding) calls `generateProductServices()` best-effort after company profile generation, then onboarding advances through the review-profile and review-products steps before completing (see [Onboarding](#onboarding)). The dashboard overview shows the **approved** count as the headline number, with a separate badge for how many are still pending review.
 - Uses the same `ANTHROPIC_API_KEY` as Company Profile.
 
 ## Dashboard layout & UI components
@@ -144,16 +148,20 @@ src/
       page.tsx           Dashboard home
       settings/          Workspace settings: rename, members, invite placeholder
       workspaces/new/    Create-workspace page
-      company-profile/   Company profile review screen (edit, approve, regenerate)
-      products/          Product/service discovery review screen (edit, approve, reject, delete, regenerate)
+      company-profile/   /dashboard/company-profile — page.tsx only, form lives in components/
+      products/          /dashboard/products — page.tsx only, cards live in components/
     onboarding/
       layout.tsx         Onboarding shell (logo, logout, centered content)
       page.tsx           Redirects to the workspace's current step
       website/, email/, countries/, customer-types/, start/   One folder per step
+      review-profile/    Step 6 — company profile review (edit, approve, regenerate, continue)
+      review-products/   Step 7 — product/service review (edit, approve, reject, delete, finish)
   components/
     landing/             Landing page sections
     dashboard/            Sidebar, topbar, workspace switcher, user menu, mobile nav context
     onboarding/           Step progress indicator
+    company-profile/      CompanyProfileForm/ApproveButton/RegenerateButton — shared by dashboard + onboarding
+    product-discovery/    ProductServiceCard/RegenerateButton — shared by dashboard + onboarding
     ui/                   Reusable primitives: Button, Input, Textarea, Label, Select, Checkbox, Badge, Card, Table, FieldError
   config/
     site.ts              Site name, nav links, dashboard nav

@@ -27,7 +27,9 @@ export default async function OnboardingLayout({ children }: { children: React.R
       </header>
 
       <main className="flex flex-1 items-start justify-center px-6 py-10 sm:items-center">
-        <div className="w-full max-w-lg">{children}</div>
+        {/* Wide enough for the review-profile/review-products steps (full edit forms) while
+            still reading fine for the earlier single-field steps. */}
+        <div className="w-full max-w-2xl">{children}</div>
       </main>
     </div>
   );

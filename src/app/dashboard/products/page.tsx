@@ -3,8 +3,8 @@ import { requireActiveWorkspace } from "@/lib/workspace";
 import { canEditProductCatalog } from "@/lib/access-control";
 import { listProductServices } from "@/lib/product-discovery/service";
 import { getLatestAnalysis } from "@/lib/website-analysis";
-import { ProductServiceCard } from "./product-service-card";
-import { RegenerateButton } from "./regenerate-button";
+import { ProductServiceCard } from "@/components/product-discovery/product-service-card";
+import { RegenerateButton } from "@/components/product-discovery/regenerate-button";
 
 export const metadata: Metadata = {
   title: "Products & Services",

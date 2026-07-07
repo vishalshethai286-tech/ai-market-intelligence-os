@@ -16,7 +16,14 @@ import {
 import { DiscoveryError } from "@/lib/product-discovery/extract";
 import { ProductServiceSchema, toList, type ProductServiceFormState } from "@/lib/validations/product-service";
 
-const PRODUCTS_PATH = "/dashboard/products";
+// Revalidated everywhere the catalog can be viewed/edited: the dashboard
+// page (approved/pending counts), the dashboard review screen, and the
+// onboarding review step.
+const PRODUCTS_PATHS = ["/dashboard", "/dashboard/products", "/onboarding/review-products"];
+
+function revalidateProductsPaths() {
+  for (const path of PRODUCTS_PATHS) revalidatePath(path);
+}
 
 export async function regenerateProductDiscoveryAction(): Promise<{ error?: string } | undefined> {
   const active = await requireActiveWorkspace();
@@ -32,7 +39,7 @@ export async function regenerateProductDiscoveryAction(): Promise<{ error?: stri
     return { error: "Couldn't run discovery right now. Please try again." };
   }
 
-  revalidatePath(PRODUCTS_PATH);
+  revalidateProductsPaths();
 }
 
 export async function updateProductServiceAction(
@@ -70,7 +77,7 @@ export async function updateProductServiceAction(
     throw error;
   }
 
-  revalidatePath(PRODUCTS_PATH);
+  revalidateProductsPaths();
   return { message: "Changes saved." };
 }
 
@@ -90,7 +97,7 @@ export async function approveProductServiceAction(id: string): Promise<{ error?:
     throw error;
   }
 
-  revalidatePath(PRODUCTS_PATH);
+  revalidateProductsPaths();
 }
 
 export async function rejectProductServiceAction(id: string): Promise<{ error?: string } | undefined> {
@@ -106,7 +113,7 @@ export async function rejectProductServiceAction(id: string): Promise<{ error?: 
     throw error;
   }
 
-  revalidatePath(PRODUCTS_PATH);
+  revalidateProductsPaths();
 }
 
 export async function deleteProductServiceAction(id: string): Promise<{ error?: string } | undefined> {
@@ -122,5 +129,5 @@ export async function deleteProductServiceAction(id: string): Promise<{ error?: 
     throw error;
   }
 
-  revalidatePath(PRODUCTS_PATH);
+  revalidateProductsPaths();
 }

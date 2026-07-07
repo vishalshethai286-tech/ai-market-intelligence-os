@@ -4,8 +4,8 @@ import { canEditCompanyProfile } from "@/lib/access-control";
 import { getCompanyProfile } from "@/lib/company-profile/service";
 import { getLatestAnalysis } from "@/lib/website-analysis";
 import { Badge } from "@/components/ui/badge";
-import { CompanyProfileForm } from "./company-profile-form";
-import { RegenerateButton } from "./regenerate-button";
+import { CompanyProfileForm } from "@/components/company-profile/company-profile-form";
+import { RegenerateButton } from "@/components/company-profile/regenerate-button";
 
 export const metadata: Metadata = {
   title: "Company profile",
