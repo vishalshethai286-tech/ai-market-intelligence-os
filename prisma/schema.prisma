@@ -88,12 +88,13 @@ model Workspace {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  members      WorkspaceMember[]
-  subscription Subscription?
-  onboarding   WorkspaceOnboarding?
-  usageLogs    UsageLog[]
-  apiCostLogs  ApiCostLog[]
-  auditLogs    AuditLog[]
+  members         WorkspaceMember[]
+  subscription    Subscription?
+  onboarding      WorkspaceOnboarding?
+  websiteAnalyses WebsiteAnalysis[]
+  usageLogs       UsageLog[]
+  apiCostLogs     ApiCostLog[]
+  auditLogs       AuditLog[]
 
   @@index([deletedAt])
   @@map("workspaces")
@@ -342,4 +343,58 @@ model WorkspaceOnboarding {
 
   @@index([status])
   @@map("workspace_onboarding")
+}
+
+// ---------------------------------------------------------------------------
+// Website analysis
+// ---------------------------------------------------------------------------
+
+enum WebsiteAnalysisStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+/// Raw result of fetching + parsing a workspace's company homepage. One row
+/// per analysis run (kept as history, not upserted), produced by
+/// src/lib/website-analyzer.
+model WebsiteAnalysis {
+  id          String @id @default(cuid())
+  workspaceId String @map("workspace_id")
+
+  url    String
+  status WebsiteAnalysisStatus @default(PENDING)
+  /// Set when status is FAILED — network error, blocked by robots.txt, SSRF guard, etc.
+  error  String?
+
+  httpStatus    Int?     @map("http_status")
+  robotsAllowed Boolean? @map("robots_allowed")
+
+  title           String?
+  metaDescription String? @map("meta_description")
+
+  /// { h1: string[], h2: string[], h3: string[] }
+  headings        Json?
+  /// Visible body text, truncated to a sane length — not the raw HTML.
+  visibleText     String? @map("visible_text")
+  /// [{ href, text }], same-origin links found on the homepage (not crawled).
+  internalLinks   Json?   @map("internal_links")
+  /// { product: [...], service: [...], about: [...], industries: [...], catalog: [...], contact: [...] }
+  identifiedPages Json?   @map("identified_pages")
+
+  /// Full structured payload as returned by the analyzer, for debugging or
+  /// reprocessing without re-fetching the page.
+  rawResult Json? @map("raw_result")
+
+  fetchedAt DateTime? @map("fetched_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([status])
+  @@map("website_analyses")
 }

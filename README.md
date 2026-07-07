@@ -56,10 +56,24 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 2. `/onboarding/email` — work email (prefilled from the session user's email)
 3. `/onboarding/countries` — target countries (multi-select checkboxes, see `src/config/onboarding.ts` for the list)
 4. `/onboarding/customer-types` — customer types (B2B, B2C, Enterprise, SMB, Startups, Government)
-5. `/onboarding/start` — review + **Start analysis** (placeholder — marks onboarding `COMPLETED` and sends the user to `/dashboard`; there's no analysis pipeline yet, wire one up in `startAnalysis()` in `src/lib/actions/onboarding.ts`)
+5. `/onboarding/start` — review + **Start analysis**, which runs the [Website Analyzer](#website-analyzer) against the company website (best-effort — a failed fetch doesn't block onboarding), then marks onboarding `COMPLETED` and sends the user to `/dashboard`
 
 - **Progress persistence**: `WorkspaceOnboarding.currentStep` tracks the furthest step reached, so a user who drops off resumes exactly where they left off (`/onboarding` redirects there), and can't skip ahead by guessing a URL — `requireOnboardingStep()` in `src/lib/onboarding.ts` bounces them back to their actual step.
 - **Gating**: signup and "create workspace" redirect to `/onboarding` instead of `/dashboard`; `dashboard/layout.tsx` redirects back to `/onboarding` if the active workspace's onboarding isn't `COMPLETED`. Each workspace's onboarding is independent — switching to an already-onboarded workspace goes straight to the dashboard.
+
+## Website Analyzer
+
+`src/lib/website-analyzer/` fetches and parses a company homepage — one request, no crawling. `src/lib/website-analysis.ts` wires it to the database (`WebsiteAnalysis`, one row per run, kept as history) and is called from `startAnalysis()` in onboarding.
+
+- **`analyzeWebsite(url)`** (`analyze.ts`) orchestrates the pipeline below and never throws — every failure mode comes back as `{ ok: false, reason, error }`:
+  1. **SSRF guard** (`ssrf-guard.ts`) — rejects non-http(s) protocols, non-standard ports, `localhost`/`.internal`/`.local` hostnames, and (via a DNS lookup) hostnames that resolve to a private/reserved IP, including the cloud metadata address `169.254.169.254`. Verified live against `169.254.169.254`, `127.0.0.1`, `10.x`, `192.168.x`, and non-standard ports — all correctly rejected without crashing; `https://example.com` correctly allowed.
+     **Known limitation** (documented in the source): DNS is checked *before* fetching, not pinned for the actual request, so it doesn't fully close a DNS-rebinding gap. Fine for analyzing a company's own website; would need a pinned-IP fetch dispatcher before pointing this at less-trusted input.
+  2. **robots.txt** (`robots.ts`) — fetches and parses `/robots.txt`, checks our user-agent (falling back to `*`) against Disallow/Allow rules for the homepage path. Fails open (allowed) if robots.txt is missing/unreachable, same convention real crawlers use.
+  3. **Safe fetch** (`safe-fetch.ts`) — identifies itself with a descriptive `User-Agent`, hard timeout, manual redirect following (each hop re-validated by the SSRF guard), and a byte cap on the response body (default 2MB) so a huge response can't exhaust memory.
+  4. **Parse** (`parse.ts`, via `cheerio`) — title, meta description, `h1`/`h2`/`h3` headings, visible body text (script/style stripped, truncated), and same-origin links (deduped, capped, external/`mailto:`/`tel:`/anchor links excluded).
+  5. **Classify** (`classify.ts`) — keyword heuristics sort the found links into `product`, `service`, `about`, `industries`, `catalog`, `contact` (a link can land in more than one category).
+- **Rate limiting**: `canStartNewAnalysis()` refuses a new run within 60s of the last one for the same workspace, or while one is still `RUNNING` — "do not scrape aggressively" in practice.
+- **Dashboard**: the Market Signals card shows the latest analysis's status (Analyzed/Failed/Analyzing), title, and identified-page-type count.
 
 ## Dashboard layout & UI components
 
@@ -123,6 +137,8 @@ src/
     access-control.ts     Role constants + permission predicates + requireRole guard
     workspace.ts          Active-workspace resolution, workspace creation
     onboarding.ts          Onboarding step guard, get-or-create, completion check
+    website-analysis.ts    DB-integrated analysis service (create/update WebsiteAnalysis, rate limit)
+    website-analyzer/      SSRF guard, robots.txt check, safe fetch, HTML parse, page classifier
     actions/auth.ts        Server actions: signup, login, logout, requestPasswordReset
     actions/workspace.ts   Server actions: createWorkspace, switchWorkspace, renameWorkspace, inviteMember
     actions/onboarding.ts  Server actions: one save action per step, startAnalysis
@@ -202,3 +218,4 @@ scripts/
 
 - Prisma 7 no longer reads `datasource.url` from `schema.prisma` — the connection is configured via the `@prisma/adapter-pg` driver adapter in [`src/lib/prisma.ts`](src/lib/prisma.ts), and via `prisma.config.ts` for the CLI (migrations, `prisma studio`, etc).
 - `src/generated/prisma` is generated output and is gitignored — run `npx prisma generate` after cloning or whenever `schema.prisma` changes.
+- `import "server-only"` (used throughout `src/lib/`) needs the `server-only` package installed as a real dependency — Next.js's bundler special-cases it at build time, but plain Node/`tsx` won't resolve it otherwise.

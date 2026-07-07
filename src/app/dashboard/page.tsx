@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { requireActiveWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
+import { getLatestAnalysis } from "@/lib/website-analysis";
 import { canInviteMembers } from "@/lib/access-control";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,9 +16,18 @@ export default async function DashboardPage() {
 
   const active = await requireActiveWorkspace();
 
-  const memberCount = await prisma.workspaceMember.count({
-    where: { workspaceId: active.workspace.id, deletedAt: null },
-  });
+  const [memberCount, latestAnalysis] = await Promise.all([
+    prisma.workspaceMember.count({
+      where: { workspaceId: active.workspace.id, deletedAt: null },
+    }),
+    getLatestAnalysis(active.workspace.id),
+  ]);
+
+  const identifiedPageCount = latestAnalysis?.identifiedPages
+    ? Object.values(latestAnalysis.identifiedPages as Record<string, unknown[]>).filter(
+        (pages) => pages.length > 0,
+      ).length
+    : 0;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -47,13 +57,34 @@ export default async function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Market Signals</CardTitle>
-            <CardDescription>Nothing tracked yet</CardDescription>
+            <div className="flex items-center justify-between">
+              <CardTitle>Market Signals</CardTitle>
+              {latestAnalysis?.status === "COMPLETED" && <Badge variant="success">Analyzed</Badge>}
+              {latestAnalysis?.status === "FAILED" && <Badge variant="danger">Failed</Badge>}
+              {latestAnalysis?.status === "RUNNING" && <Badge variant="warning">Analyzing</Badge>}
+            </div>
+            <CardDescription>
+              {latestAnalysis ? latestAnalysis.url : "Nothing tracked yet"}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-black/50 dark:text-white/50">
-              Signals will show up here once this workspace is connected to a data source.
-            </p>
+            {!latestAnalysis && (
+              <p className="text-sm text-black/50 dark:text-white/50">
+                Signals will show up here once this workspace is connected to a data source.
+              </p>
+            )}
+            {latestAnalysis?.status === "COMPLETED" && (
+              <p className="text-sm text-black/50 dark:text-white/50">
+                {latestAnalysis.title ?? "Homepage analyzed"} &middot; {identifiedPageCount} page{" "}
+                {identifiedPageCount === 1 ? "type" : "types"} identified
+              </p>
+            )}
+            {latestAnalysis?.status === "FAILED" && (
+              <p className="text-sm text-black/50 dark:text-white/50">{latestAnalysis.error}</p>
+            )}
+            {latestAnalysis?.status === "RUNNING" && (
+              <p className="text-sm text-black/50 dark:text-white/50">Fetching homepage...</p>
+            )}
           </CardContent>
         </Card>
 

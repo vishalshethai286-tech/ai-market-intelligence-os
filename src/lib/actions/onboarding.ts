@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getOrCreateOnboarding, requireOnboardingStep, stepPath } from "@/lib/onboarding";
+import { canStartNewAnalysis, runAndStoreWebsiteAnalysis } from "@/lib/website-analysis";
 import {
   CountriesSchema,
   CustomerTypesSchema,
@@ -95,12 +96,20 @@ export async function saveCustomerTypesStep(
 }
 
 /**
- * Placeholder only — marks onboarding complete and sends the user to the
- * dashboard. There is no analysis pipeline yet; wire one up here before
- * shipping the real "Start analysis" behavior.
+ * Kicks off the website analyzer for the workspace's homepage (best-effort —
+ * a failed fetch doesn't block onboarding), marks onboarding complete, and
+ * sends the user to the dashboard.
  */
 export async function startAnalysis() {
-  const { active } = await requireOnboardingStep("start");
+  const { active, onboarding } = await requireOnboardingStep("start");
+
+  if (onboarding.companyWebsite && (await canStartNewAnalysis(active.workspace.id))) {
+    try {
+      await runAndStoreWebsiteAnalysis(active.workspace.id, onboarding.companyWebsite);
+    } catch {
+      // Analysis is best-effort enrichment — don't block onboarding on it.
+    }
+  }
 
   await prisma.workspaceOnboarding.update({
     where: { workspaceId: active.workspace.id },
