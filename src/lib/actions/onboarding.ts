@@ -6,6 +6,7 @@ import { getOrCreateOnboarding, requireOnboardingStep, stepPath } from "@/lib/on
 import { canStartNewAnalysis, runAndStoreWebsiteAnalysis } from "@/lib/website-analysis";
 import { generateCompanyProfile } from "@/lib/company-profile/service";
 import { generateProductServices } from "@/lib/product-discovery/service";
+import { buildInitialBrain } from "@/lib/business-brain/service";
 import {
   CountriesSchema,
   CustomerTypesSchema,
@@ -127,9 +128,20 @@ export async function continueToReviewProducts() {
   redirect(stepPath("review-products"));
 }
 
-/** Final onboarding step: marks the workspace onboarded and sends the user to the dashboard. */
+/**
+ * Final onboarding step: marks the workspace onboarded, builds its initial
+ * AI Business Brain from the (reviewed) profile and catalog — best-effort,
+ * same non-blocking convention as the rest of onboarding's enrichment steps
+ * — and sends the user to the dashboard.
+ */
 export async function completeOnboarding() {
   const { active } = await requireOnboardingStep("review-products");
+
+  try {
+    await buildInitialBrain(active.workspace.id);
+  } catch {
+    // Brain building is best-effort enrichment — don't block onboarding on it.
+  }
 
   await prisma.workspaceOnboarding.update({
     where: { workspaceId: active.workspace.id },

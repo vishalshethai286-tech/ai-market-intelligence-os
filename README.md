@@ -25,7 +25,7 @@ Multi-tenant schema defined in [`prisma/schema.prisma`](prisma/schema.prisma):
 - **WebsiteAnalysis** — raw result of analyzing a workspace's homepage (see [Website Analyzer](#website-analyzer)).
 - **CompanyProfile** — AI-extracted company profile built from a `WebsiteAnalysis` (see [Company Profile](#company-profile-ai-extraction)).
 - **ProductService** — AI-discovered product/service catalog entries built from a `WebsiteAnalysis` (see [Product/Service Discovery](#productservice-discovery-ai-extraction)).
-- **BusinessBrain**, **BrainFact**, **BrainSource**, **BrainEntity**, **BrainRelationship**, **BrainUpdateRun** — a per-workspace knowledge base (schema only so far — see [AI Business Brain](#ai-business-brain-schema)).
+- **BusinessBrain**, **BrainFact**, **BrainSource**, **BrainEntity**, **BrainRelationship**, **BrainUpdateRun** — a per-workspace knowledge base, built from the company profile/product catalog after onboarding (see [AI Business Brain](#ai-business-brain)).
 
 Soft delete (`deletedAt`) is used on entities users can remove (User, Workspace, WorkspaceMember, Subscription). `Plan` and `Role` are reference/config data — retire with `isActive`/`isSystem` flags instead of deleting, since Subscriptions and memberships reference them. The three log tables (`UsageLog`, `ApiCostLog`, `AuditLog`) are append-only: no `updatedAt` or `deletedAt`, since rows are written once and never mutated.
 
@@ -106,17 +106,32 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 - **Wiring**: `startAnalysis()` (onboarding) calls `generateProductServices()` best-effort after company profile generation, then onboarding advances through the review-profile and review-products steps before completing (see [Onboarding](#onboarding)). The dashboard overview shows the **approved** count as the headline number, with a separate badge for how many are still pending review.
 - Uses the same `ANTHROPIC_API_KEY` as Company Profile.
 
-## AI Business Brain (schema)
+## AI Business Brain
 
-A per-workspace knowledge base intended to eventually aggregate everything this app learns about a company — website analysis, company profile, product catalog, and future sources — into queryable facts and a lightweight entity graph. **Schema only so far**: the six models below are defined and migrated, but there's no extraction/service/UI layer yet (that's future work — see `prisma/schema.prisma` for the full field list and doc comments).
+A per-workspace knowledge base that aggregates everything this app learns about a company — company profile, product catalog, target countries, and (best-effort) competitors — into queryable facts and a lightweight entity graph.
+
+### Schema
 
 - **BusinessBrain** — the aggregate root, one per workspace (`status`: `INITIALIZING` / `ACTIVE` / `STALE`). Every other model below hangs off a `brainId`, and also carries `workspaceId` directly so it's queryable without a join.
-- **BrainFact** — an atomic piece of knowledge. Stores exactly what was asked for: `workspaceId`, `factType` (a bounded enum — company name, industry, headquarters, certification, financial, etc., with an `OTHER` escape hatch), `factValue`, `sourceUrl`, `confidenceScore`, `lastVerifiedAt`, and `freshnessScore` (0-1, decays the longer a fact goes unverified — distinct from `confidenceScore`, which is about extraction accuracy at capture time, not recency). Optionally links to the `BrainSource` and `BrainEntity` it came from/is about.
+- **BrainFact** — an atomic piece of knowledge: `workspaceId`, `factType` (a bounded enum — company name, industry, headquarters, certification, financial, etc., with an `OTHER` escape hatch), `factValue`, `sourceUrl`, `confidenceScore`, `lastVerifiedAt`, and `freshnessScore` (0-1, decays the longer a fact goes unverified — distinct from `confidenceScore`, which is about extraction accuracy at capture time, not recency). Optionally links to the `BrainSource` and `BrainEntity` it came from/is about.
 - **BrainSource** — where a piece of knowledge came from (`sourceType`: website page / document / manual entry / third-party API), optionally traceable back to the `WebsiteAnalysis` run that produced it.
 - **BrainEntity** — a named "node" the brain has identified (organization, person, product, location, certification, industry). `BrainFact` can attach to the entity it's about.
 - **BrainRelationship** — a directed edge between two `BrainEntity` rows (`fromEntityId` → `toEntityId`), e.g. "Acme Corp" —`CERTIFIED_BY`→ "ISO 9001". `relationshipType` is free text (open-ended vocabulary), unlike the closed `factType`/`entityType`/`sourceType` enums.
 - **BrainUpdateRun** — history of refresh operations (status, trigger, facts created/updated/expired, optional `triggeredByUserId`), the same run-history pattern as `WebsiteAnalysis`.
 - **Cascade rules** (verified against a live DB): deleting a `BrainSource` or `BrainEntity` that a fact/relationship merely *references* sets that reference to `null` rather than deleting the fact/relationship; deleting an entity that's the `fromEntity`/`toEntity` of a relationship cascades and removes that relationship; deleting the workspace cascades through the entire graph.
+
+### Initial brain builder
+
+`src/lib/business-brain/service.ts` — **`buildInitialBrain(workspaceId)`** synthesizes the initial brain once, right after onboarding completes:
+
+- **Company profile** → one `BrainFact` per populated field (company name, description, industry, business model, headquarters, operation type — using the same friendly labels as the review screen), plus one `BrainEntity`(`CERTIFICATION`) + `CERTIFIED_BY` relationship per certification.
+- **Products/services** (every non-`REJECTED` row — approval isn't required, since a user may finish onboarding without approving everything) → one `BrainEntity`(`PRODUCT`) + `OFFERS` relationship and one `PRODUCT_OR_SERVICE` fact per item.
+- **Industries, buyer types, search keywords** → deduped (case-insensitively) across all included products into `TARGET_INDUSTRY` / `BUYER_TYPE` / `KEYWORD` facts.
+- **Target countries** → deduped union of the company profile's `countriesServed` and the onboarding wizard's selected target countries (mapped from ISO codes to names), as `COUNTRY_SERVED` facts.
+- **Competitors, if known** (`src/lib/business-brain/competitors.ts`) — one Claude call (`claude-opus-4-8`, structured outputs) given the aggregated profile, asking it to name only competitors it has genuine knowledge of. Returns an empty list rather than guessing, and **fails open** (catches its own errors, including a missing/invalid `ANTHROPIC_API_KEY`) so a competitor-lookup failure never blocks the rest of the brain from being built. Each identified competitor becomes a `BrainEntity`(`ORGANIZATION`) + `COMPETES_WITH` relationship.
+- Every fact/entity/relationship from this run shares one `BrainSource` pointing at the workspace's latest completed `WebsiteAnalysis`, so everything traces back to where it came from.
+- **Idempotent**: if the workspace's brain is already populated (`status` ≠ `INITIALIZING`), calling this again is a no-op — it builds the *initial* brain once. If a previous attempt failed partway, the brain stays `INITIALIZING` so the next call retries instead of returning permanently empty. Population happens in a single transaction, so a failure can't leave a half-built graph.
+- **Wiring**: `completeOnboarding()` calls this best-effort right before marking onboarding `COMPLETED`, same non-blocking convention as the rest of onboarding's enrichment steps.
 
 ## Dashboard layout & UI components
 
@@ -190,6 +205,7 @@ src/
     website-analyzer/      SSRF guard, robots.txt check, safe fetch, HTML parse, page classifier
     company-profile/       AI extraction (Claude, structured outputs) + DB-integrated service
     product-discovery/     Bounded multi-page fetch + AI extraction (Claude, structured outputs) + DB-integrated service
+    business-brain/        buildInitialBrain() — synthesizes profile/products/countries into facts + entities + relationships
     actions/auth.ts        Server actions: signup, login, logout, requestPasswordReset
     actions/workspace.ts   Server actions: createWorkspace, switchWorkspace, renameWorkspace, inviteMember
     actions/onboarding.ts  Server actions: one save action per step, startAnalysis
@@ -280,3 +296,4 @@ scripts/
 - `import "server-only"` (used throughout `src/lib/`) needs the `server-only` package installed as a real dependency — Next.js's bundler special-cases it at build time, but plain Node/`tsx` won't resolve it otherwise.
 - The company-profile extraction call (`src/lib/company-profile/extract.ts`) was verified against the local DB (upsert/update/approve/regenerate logic, cascade deletes) but not against a live Claude API call — no `ANTHROPIC_API_KEY` was available in this environment. Set one in `.env` locally and in Vercel's env vars before relying on it in production.
 - Same caveat for product/service discovery (`src/lib/product-discovery/extract.ts`) — the create/update/approve/reject/delete/regenerate-preserves-approved logic was verified against the local DB, and the bounded multi-page fetch (`fetch-pages.ts`) is a thin, already-typechecked composition of the website analyzer's live-verified SSRF guard/robots-check/safe-fetch, but the actual Claude call is untested without `ANTHROPIC_API_KEY`.
+- `buildInitialBrain()` (`src/lib/business-brain/service.ts`) was verified end-to-end through the real running app (seeded an approved profile + mixed-status products, ran onboarding's Finish step, confirmed the fact/entity/relationship counts and dedup by querying the DB directly) — but without `ANTHROPIC_API_KEY`, `identifyCompetitors()` fails open and every brain built so far has zero competitors. That's by design (fail-open, not a required step) but means the competitor path itself hasn't been exercised against a real response.
