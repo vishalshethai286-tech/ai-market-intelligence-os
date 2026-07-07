@@ -5,6 +5,7 @@ import { requireActiveWorkspace } from "@/lib/workspace";
 import { prisma } from "@/lib/prisma";
 import { getLatestAnalysis } from "@/lib/website-analysis";
 import { getCompanyProfile } from "@/lib/company-profile/service";
+import { listProductServices } from "@/lib/product-discovery/service";
 import { canInviteMembers } from "@/lib/access-control";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,13 +18,17 @@ export default async function DashboardPage() {
 
   const active = await requireActiveWorkspace();
 
-  const [memberCount, latestAnalysis, companyProfile] = await Promise.all([
+  const [memberCount, latestAnalysis, companyProfile, productServices] = await Promise.all([
     prisma.workspaceMember.count({
       where: { workspaceId: active.workspace.id, deletedAt: null },
     }),
     getLatestAnalysis(active.workspace.id),
     getCompanyProfile(active.workspace.id),
+    listProductServices(active.workspace.id),
   ]);
+
+  const approvedProductCount = productServices.filter((p) => p.status === "APPROVED").length;
+  const pendingProductCount = productServices.filter((p) => p.status === "PENDING_REVIEW").length;
 
   const identifiedPageCount = latestAnalysis?.identifiedPages
     ? Object.values(latestAnalysis.identifiedPages as Record<string, unknown[]>).filter(
@@ -110,6 +115,33 @@ export default async function DashboardPage() {
               className="mt-1 inline-block text-sm text-black/50 hover:text-current dark:text-white/50"
             >
               {companyProfile ? "Review profile" : "Get started"} &rarr;
+            </Link>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Products & Services</CardTitle>
+              {pendingProductCount > 0 && <Badge variant="warning">{pendingProductCount} to review</Badge>}
+            </div>
+            <CardDescription>
+              {productServices.length > 0
+                ? `${approvedProductCount} approved · ${productServices.length} total`
+                : "Not discovered yet"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-black/50 dark:text-white/50">
+              {productServices.length > 0
+                ? "AI-discovered catalog from your website content."
+                : "Discover products and services from your website content."}
+            </p>
+            <Link
+              href="/dashboard/products"
+              className="mt-1 inline-block text-sm text-black/50 hover:text-current dark:text-white/50"
+            >
+              {productServices.length > 0 ? "Review catalog" : "Get started"} &rarr;
             </Link>
           </CardContent>
         </Card>

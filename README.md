@@ -24,6 +24,7 @@ Multi-tenant schema defined in [`prisma/schema.prisma`](prisma/schema.prisma):
 - **AuditLog** — immutable trail of actions taken by users.
 - **WebsiteAnalysis** — raw result of analyzing a workspace's homepage (see [Website Analyzer](#website-analyzer)).
 - **CompanyProfile** — AI-extracted company profile built from a `WebsiteAnalysis` (see [Company Profile](#company-profile-ai-extraction)).
+- **ProductService** — AI-discovered product/service catalog entries built from a `WebsiteAnalysis` (see [Product/Service Discovery](#productservice-discovery-ai-extraction)).
 
 Soft delete (`deletedAt`) is used on entities users can remove (User, Workspace, WorkspaceMember, Subscription). `Plan` and `Role` are reference/config data — retire with `isActive`/`isSystem` flags instead of deleting, since Subscriptions and memberships reference them. The three log tables (`UsageLog`, `ApiCostLog`, `AuditLog`) are append-only: no `updatedAt` or `deletedAt`, since rows are written once and never mutated.
 
@@ -88,6 +89,18 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 - **Wiring**: `startAnalysis()` (onboarding) calls `generateCompanyProfile()` best-effort right after the website analysis, same non-blocking convention as the analysis itself. The dashboard overview shows a Company Profile card with status + confidence.
 - Requires `ANTHROPIC_API_KEY` in `.env` (and in Vercel's env vars for production) — see [Local setup](#local-setup).
 
+## Product/Service Discovery (AI extraction)
+
+`src/lib/product-discovery/` discovers distinct products/services from a workspace's website content and stores them as a `ProductService` catalog — unlike Company Profile, this is a **list**: many rows per workspace, not one.
+
+- **Beyond the homepage**: the Website Analyzer deliberately never crawls, so discovery does its own small, bounded fetch — `fetchAdditionalPages()` (`fetch-pages.ts`) pulls up to 6 pages classified as `product`/`service`/`catalog` by the analyzer's `identifiedPages`, reusing the same SSRF guard, robots.txt check, and safe fetch as the analyzer (single request per page, no recursion, a failed page is skipped rather than failing the run). The homepage's already-stored content is included alongside these.
+- **Extracted fields**: name, category, subcategory, description, applications, target industries, buyer types, keywords, and a 0-1 confidence score, per product/service. `sourceUrls` is **schema-constrained** to an enum of the URLs actually fetched for that run (`schema.ts` builds the JSON Schema per-call from that list) — the model can cite a page it was given, never invent one.
+- **`extractProductServices(pages)`** (`extract.ts`) calls Claude (`claude-opus-4-8`, structured outputs, adaptive thinking, `effort: "high"`) with all fetched pages in one prompt, asking it to merge duplicates that appear on multiple pages into a single record (citing every page it appears on) and cap the result at 20 items. Throws `DiscoveryError` on refusal, truncation, or malformed JSON.
+- **`generateProductServices(workspaceId)`** (`service.ts`): finds the latest `COMPLETED` analysis, fetches the extra pages, runs extraction, then in one transaction deletes every **non-`APPROVED`** row for the workspace and inserts the fresh batch. `APPROVED` rows are never touched by a regenerate — approval is treated as a finalized human decision, not a draft.
+- **Review screen** (`/dashboard/products`): one card per record, each independently editable (**Save changes**) and independently **Approve** / **Reject** / **Delete** — ownership-checked server-side (`requireOwnedProductService`) so an id from one workspace can't be used to touch another's rows. Gated by `canEditProductCatalog()` (same roles as Company Profile).
+- **Wiring**: `startAnalysis()` (onboarding) calls `generateProductServices()` best-effort after company profile generation. The dashboard overview shows an approved/pending count.
+- Uses the same `ANTHROPIC_API_KEY` as Company Profile.
+
 ## Dashboard layout & UI components
 
 - **Shell** (`src/app/dashboard/layout.tsx`): sidebar + topbar, wrapped in a `MobileNavProvider` (`src/components/dashboard/mobile-nav-context.tsx`) so the sidebar can act as a slide-in drawer on mobile (`sm:` breakpoint and below) — a hamburger button in the topbar toggles it, a backdrop and nav-link clicks close it.
@@ -132,6 +145,7 @@ src/
       settings/          Workspace settings: rename, members, invite placeholder
       workspaces/new/    Create-workspace page
       company-profile/   Company profile review screen (edit, approve, regenerate)
+      products/          Product/service discovery review screen (edit, approve, reject, delete, regenerate)
     onboarding/
       layout.tsx         Onboarding shell (logo, logout, centered content)
       page.tsx           Redirects to the workspace's current step
@@ -154,14 +168,18 @@ src/
     website-analysis.ts    DB-integrated analysis service (create/update WebsiteAnalysis, rate limit)
     website-analyzer/      SSRF guard, robots.txt check, safe fetch, HTML parse, page classifier
     company-profile/       AI extraction (Claude, structured outputs) + DB-integrated service
+    product-discovery/     Bounded multi-page fetch + AI extraction (Claude, structured outputs) + DB-integrated service
     actions/auth.ts        Server actions: signup, login, logout, requestPasswordReset
     actions/workspace.ts   Server actions: createWorkspace, switchWorkspace, renameWorkspace, inviteMember
     actions/onboarding.ts  Server actions: one save action per step, startAnalysis
     actions/company-profile.ts  Server actions: regenerate, update, approve
+    actions/product-discovery.ts  Server actions: regenerate, update, approve, reject, delete
     validations/auth.ts    Zod schemas for signup/login forms
     validations/workspace.ts  Zod schemas for workspace name / invite forms
     validations/onboarding.ts Zod schemas for each onboarding step
+    validations/shared.ts  Shared `toList()` comma-separated-input helper
     validations/company-profile.ts Zod schema for the profile edit form
+    validations/product-service.ts Zod schema for the product/service edit form
   types/next-auth.d.ts   Session/JWT type augmentation (id)
   generated/
     prisma/               Generated Prisma client (gitignored, not committed)
@@ -240,3 +258,4 @@ scripts/
 - `src/generated/prisma` is generated output and is gitignored — run `npx prisma generate` after cloning or whenever `schema.prisma` changes.
 - `import "server-only"` (used throughout `src/lib/`) needs the `server-only` package installed as a real dependency — Next.js's bundler special-cases it at build time, but plain Node/`tsx` won't resolve it otherwise.
 - The company-profile extraction call (`src/lib/company-profile/extract.ts`) was verified against the local DB (upsert/update/approve/regenerate logic, cascade deletes) but not against a live Claude API call — no `ANTHROPIC_API_KEY` was available in this environment. Set one in `.env` locally and in Vercel's env vars before relying on it in production.
+- Same caveat for product/service discovery (`src/lib/product-discovery/extract.ts`) — the create/update/approve/reject/delete/regenerate-preserves-approved logic was verified against the local DB, and the bounded multi-page fetch (`fetch-pages.ts`) is a thin, already-typechecked composition of the website analyzer's live-verified SSRF guard/robots-check/safe-fetch, but the actual Claude call is untested without `ANTHROPIC_API_KEY`.

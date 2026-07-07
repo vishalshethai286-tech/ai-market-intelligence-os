@@ -72,6 +72,7 @@ model User {
   usageLogs               UsageLog[]
   auditLogsActing         AuditLog[]        @relation("AuditLogActor")
   approvedCompanyProfiles CompanyProfile[]  @relation("CompanyProfileApprovedBy")
+  approvedProductServices ProductService[]  @relation("ProductServiceApprovedBy")
 
   @@index([deletedAt])
   @@map("users")
@@ -94,6 +95,7 @@ model Workspace {
   onboarding      WorkspaceOnboarding?
   websiteAnalyses WebsiteAnalysis[]
   companyProfile  CompanyProfile?
+  productServices ProductService[]
   usageLogs       UsageLog[]
   apiCostLogs     ApiCostLog[]
   auditLogs       AuditLog[]
@@ -396,6 +398,7 @@ model WebsiteAnalysis {
 
   workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   companyProfiles CompanyProfile[]
+  productServices ProductService[]
 
   @@index([workspaceId, createdAt])
   @@index([status])
@@ -464,4 +467,60 @@ model CompanyProfile {
   @@index([status])
   @@index([websiteAnalysisId])
   @@map("company_profiles")
+}
+
+// ---------------------------------------------------------------------------
+// Product / service discovery (AI-extracted)
+// ---------------------------------------------------------------------------
+
+enum ProductServiceStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+/// AI-discovered product or service, generated from a workspace's website
+/// content (homepage plus a bounded set of identified product/service/catalog
+/// pages — see src/lib/product-discovery). Unlike CompanyProfile this is a
+/// catalog: many rows per workspace. Regenerating replaces PENDING_REVIEW and
+/// REJECTED rows with a fresh extraction but never touches APPROVED ones,
+/// which are treated as a finalized human decision.
+model ProductService {
+  id                String  @id @default(cuid())
+  workspaceId       String  @map("workspace_id")
+  websiteAnalysisId String? @map("website_analysis_id")
+
+  name             String
+  category         String?
+  subcategory      String?
+  description      String?
+  /// Use cases / applications mentioned for this product or service.
+  applications     String[]
+  targetIndustries String[] @map("target_industries")
+  /// e.g. "OEM", "Distributor", "End consumer", "Government"
+  buyerTypes       String[] @map("buyer_types")
+  keywords         String[]
+
+  /// URLs actually fetched and used as extraction input for this item.
+  sourceUrls      String[] @map("source_urls")
+  /// 0-1, the model's self-reported confidence in this extraction.
+  confidenceScore Float    @default(0) @map("confidence_score")
+
+  /// The AI's original output for this record, untouched by later user edits.
+  aiRawExtraction Json? @map("ai_raw_extraction")
+
+  status           ProductServiceStatus @default(PENDING_REVIEW)
+  approvedAt       DateTime?            @map("approved_at")
+  approvedByUserId String?              @map("approved_by_user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  websiteAnalysis WebsiteAnalysis? @relation(fields: [websiteAnalysisId], references: [id], onDelete: SetNull)
+  approvedBy      User?            @relation("ProductServiceApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([websiteAnalysisId])
+  @@map("product_services")
 }

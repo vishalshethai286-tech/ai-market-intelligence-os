@@ -1,0 +1,126 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { auth } from "@/auth";
+import { requireActiveWorkspace } from "@/lib/workspace";
+import { canEditProductCatalog } from "@/lib/access-control";
+import {
+  approveProductService,
+  deleteProductService,
+  generateProductServices,
+  NoAnalysisError,
+  ProductServiceNotFoundError,
+  rejectProductService,
+  updateProductService,
+} from "@/lib/product-discovery/service";
+import { DiscoveryError } from "@/lib/product-discovery/extract";
+import { ProductServiceSchema, toList, type ProductServiceFormState } from "@/lib/validations/product-service";
+
+const PRODUCTS_PATH = "/dashboard/products";
+
+export async function regenerateProductDiscoveryAction(): Promise<{ error?: string } | undefined> {
+  const active = await requireActiveWorkspace();
+  if (!canEditProductCatalog(active.role)) {
+    return { error: "You don't have access to run product discovery." };
+  }
+
+  try {
+    await generateProductServices(active.workspace.id);
+  } catch (error) {
+    if (error instanceof NoAnalysisError) return { error: error.message };
+    if (error instanceof DiscoveryError) return { error: error.message };
+    return { error: "Couldn't run discovery right now. Please try again." };
+  }
+
+  revalidatePath(PRODUCTS_PATH);
+}
+
+export async function updateProductServiceAction(
+  _prevState: ProductServiceFormState,
+  formData: FormData,
+): Promise<ProductServiceFormState> {
+  const active = await requireActiveWorkspace();
+  if (!canEditProductCatalog(active.role)) {
+    return { message: "You don't have access to edit this record." };
+  }
+
+  const id = formData.get("id");
+  if (typeof id !== "string" || !id) {
+    return { message: "Missing record id." };
+  }
+
+  const validatedFields = ProductServiceSchema.safeParse({
+    name: formData.get("name"),
+    category: formData.get("category"),
+    subcategory: formData.get("subcategory"),
+    description: formData.get("description"),
+    applications: toList(formData.get("applications")),
+    targetIndustries: toList(formData.get("targetIndustries")),
+    buyerTypes: toList(formData.get("buyerTypes")),
+    keywords: toList(formData.get("keywords")),
+  });
+  if (!validatedFields.success) {
+    return { errors: validatedFields.error.flatten().fieldErrors };
+  }
+
+  try {
+    await updateProductService(active.workspace.id, id, validatedFields.data);
+  } catch (error) {
+    if (error instanceof ProductServiceNotFoundError) return { message: error.message };
+    throw error;
+  }
+
+  revalidatePath(PRODUCTS_PATH);
+  return { message: "Changes saved." };
+}
+
+export async function approveProductServiceAction(id: string): Promise<{ error?: string } | undefined> {
+  const session = await auth();
+  if (!session?.user?.id) return { error: "You must be signed in." };
+
+  const active = await requireActiveWorkspace();
+  if (!canEditProductCatalog(active.role)) {
+    return { error: "You don't have access to approve this record." };
+  }
+
+  try {
+    await approveProductService(active.workspace.id, id, session.user.id);
+  } catch (error) {
+    if (error instanceof ProductServiceNotFoundError) return { error: error.message };
+    throw error;
+  }
+
+  revalidatePath(PRODUCTS_PATH);
+}
+
+export async function rejectProductServiceAction(id: string): Promise<{ error?: string } | undefined> {
+  const active = await requireActiveWorkspace();
+  if (!canEditProductCatalog(active.role)) {
+    return { error: "You don't have access to reject this record." };
+  }
+
+  try {
+    await rejectProductService(active.workspace.id, id);
+  } catch (error) {
+    if (error instanceof ProductServiceNotFoundError) return { error: error.message };
+    throw error;
+  }
+
+  revalidatePath(PRODUCTS_PATH);
+}
+
+export async function deleteProductServiceAction(id: string): Promise<{ error?: string } | undefined> {
+  const active = await requireActiveWorkspace();
+  if (!canEditProductCatalog(active.role)) {
+    return { error: "You don't have access to delete this record." };
+  }
+
+  try {
+    await deleteProductService(active.workspace.id, id);
+  } catch (error) {
+    if (error instanceof ProductServiceNotFoundError) return { error: error.message };
+    throw error;
+  }
+
+  revalidatePath(PRODUCTS_PATH);
+}

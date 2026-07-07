@@ -1,14 +1,8 @@
 import * as z from "zod";
 import { OPERATION_TYPES } from "@/lib/company-profile/constants";
+import { toList } from "./shared";
 
-/** Editable array fields are submitted as a single comma-separated text input. */
-export function toList(value: FormDataEntryValue | null): string[] {
-  if (typeof value !== "string") return [];
-  return value
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
+export { toList };
 
 export const CompanyProfileSchema = z.object({
   companyName: z.string().trim().max(200),

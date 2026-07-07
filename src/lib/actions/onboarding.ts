@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getOrCreateOnboarding, requireOnboardingStep, stepPath } from "@/lib/onboarding";
 import { canStartNewAnalysis, runAndStoreWebsiteAnalysis } from "@/lib/website-analysis";
 import { generateCompanyProfile } from "@/lib/company-profile/service";
+import { generateProductServices } from "@/lib/product-discovery/service";
 import {
   CountriesSchema,
   CustomerTypesSchema,
@@ -108,8 +109,9 @@ export async function startAnalysis() {
     try {
       await runAndStoreWebsiteAnalysis(active.workspace.id, onboarding.companyWebsite);
       await generateCompanyProfile(active.workspace.id);
+      await generateProductServices(active.workspace.id);
     } catch {
-      // Analysis and profile extraction are best-effort enrichment — don't block onboarding on them.
+      // Analysis, profile extraction, and product discovery are best-effort enrichment — don't block onboarding on them.
     }
   }
 

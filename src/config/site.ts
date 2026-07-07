@@ -14,6 +14,7 @@ export const dashboardNav = [
   { label: "Overview", href: "/dashboard" },
   { label: "Market Signals", href: "/dashboard/signals" },
   { label: "Company Profile", href: "/dashboard/company-profile" },
+  { label: "Products & Services", href: "/dashboard/products" },
   { label: "Reports", href: "/dashboard/reports" },
   { label: "Settings", href: "/dashboard/settings" },
 ] as const;
