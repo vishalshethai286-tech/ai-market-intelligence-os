@@ -55,7 +55,7 @@ export async function signup(
   }
 
   try {
-    await signIn("credentials", { email, password, redirectTo: "/dashboard" });
+    await signIn("credentials", { email, password, redirectTo: "/onboarding" });
   } catch (error) {
     if (error instanceof AuthError) {
       return { message: "Account created, but sign-in failed. Please log in." };

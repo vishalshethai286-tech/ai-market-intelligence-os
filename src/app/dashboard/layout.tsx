@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { isOnboardingComplete } from "@/lib/onboarding";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Topbar } from "@/components/dashboard/topbar";
 import { MobileNavProvider } from "@/components/dashboard/mobile-nav-context";
@@ -17,6 +18,11 @@ export default async function DashboardLayout({
   }
 
   const context = await getWorkspaceContext();
+
+  if (context?.active && !(await isOnboardingComplete(context.active.workspace.id))) {
+    redirect("/onboarding");
+  }
+
   const workspaces = (context?.memberships ?? []).map((m) => ({
     id: m.workspace.id,
     name: m.workspace.name,

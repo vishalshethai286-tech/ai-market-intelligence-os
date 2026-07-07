@@ -48,7 +48,7 @@ export async function createWorkspace(
   const cookieStore = await cookies();
   cookieStore.set(ACTIVE_WORKSPACE_COOKIE, workspace.id, ACTIVE_WORKSPACE_COOKIE_OPTIONS);
 
-  redirect("/dashboard");
+  redirect("/onboarding");
 }
 
 /** Called directly from the workspace switcher (not a `<form>` submit). */

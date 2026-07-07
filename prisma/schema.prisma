@@ -42,6 +42,12 @@ enum PlanKey {
   ENTERPRISE
 }
 
+enum OnboardingStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
@@ -84,6 +90,7 @@ model Workspace {
 
   members      WorkspaceMember[]
   subscription Subscription?
+  onboarding   WorkspaceOnboarding?
   usageLogs    UsageLog[]
   apiCostLogs  ApiCostLog[]
   auditLogs    AuditLog[]
@@ -300,4 +307,39 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding
+// ---------------------------------------------------------------------------
+
+/// Tracks a Workspace's progress through the website-first onboarding wizard
+/// (company website -> work email -> target countries -> customer types ->
+/// start analysis). One row per Workspace, created lazily on first visit.
+model WorkspaceOnboarding {
+  id          String @id @default(cuid())
+  workspaceId String @unique @map("workspace_id")
+
+  companyWebsite String? @map("company_website")
+  workEmail      String? @map("work_email")
+
+  /// ISO country codes, e.g. ["US", "GB", "IN"]
+  targetCountries String[] @map("target_countries")
+  /// e.g. ["B2B", "ENTERPRISE"] — see src/config/onboarding.ts for the option list
+  customerTypes   String[] @map("customer_types")
+
+  status      OnboardingStatus @default(NOT_STARTED)
+  /// Furthest step reached (1-5); lets a user resume where they left off.
+  currentStep Int              @default(1) @map("current_step")
+
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("workspace_onboarding")
 }

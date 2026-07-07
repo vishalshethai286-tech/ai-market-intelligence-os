@@ -48,6 +48,19 @@ Email/password auth via [Auth.js (NextAuth v5)](https://authjs.dev), configured 
 - **Roles**: `OWNER`, `ADMIN`, `SALES_USER`, `VIEWER` (seeded in `prisma/seed.ts` — `WorkspaceMember.roleId` requires one of these to exist, so run the seed before testing signup).
 - **Access control** (`src/lib/access-control.ts`): pure role-check helpers — `canManageWorkspace`, `canInviteMembers`, `canManageBilling`, `canRemoveMember`, `isOwner` — plus a `requireRole()` guard that throws `AccessDeniedError` for use in actions/route handlers. Only `OWNER`/`ADMIN` can rename the workspace or invite members; only `OWNER` can manage billing or remove another `OWNER`.
 
+## Onboarding
+
+Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`prisma/schema.prisma`), gating access to the dashboard until finished:
+
+1. `/onboarding/website` — company website (bare domains like `acme.com` are normalized to `https://acme.com`)
+2. `/onboarding/email` — work email (prefilled from the session user's email)
+3. `/onboarding/countries` — target countries (multi-select checkboxes, see `src/config/onboarding.ts` for the list)
+4. `/onboarding/customer-types` — customer types (B2B, B2C, Enterprise, SMB, Startups, Government)
+5. `/onboarding/start` — review + **Start analysis** (placeholder — marks onboarding `COMPLETED` and sends the user to `/dashboard`; there's no analysis pipeline yet, wire one up in `startAnalysis()` in `src/lib/actions/onboarding.ts`)
+
+- **Progress persistence**: `WorkspaceOnboarding.currentStep` tracks the furthest step reached, so a user who drops off resumes exactly where they left off (`/onboarding` redirects there), and can't skip ahead by guessing a URL — `requireOnboardingStep()` in `src/lib/onboarding.ts` bounces them back to their actual step.
+- **Gating**: signup and "create workspace" redirect to `/onboarding` instead of `/dashboard`; `dashboard/layout.tsx` redirects back to `/onboarding` if the active workspace's onboarding isn't `COMPLETED`. Each workspace's onboarding is independent — switching to an already-onboarded workspace goes straight to the dashboard.
+
 ## Dashboard layout & UI components
 
 - **Shell** (`src/app/dashboard/layout.tsx`): sidebar + topbar, wrapped in a `MobileNavProvider` (`src/components/dashboard/mobile-nav-context.tsx`) so the sidebar can act as a slide-in drawer on mobile (`sm:` breakpoint and below) — a hamburger button in the topbar toggles it, a backdrop and nav-link clicks close it.
@@ -87,26 +100,35 @@ src/
       forgot-password/   /forgot-password (placeholder)
     api/auth/[...nextauth]/route.ts   Auth.js route handler
     dashboard/
-      layout.tsx         Dashboard shell (sidebar + topbar) — session + workspace context
+      layout.tsx         Dashboard shell (sidebar + topbar) — session + workspace + onboarding gate
       page.tsx           Dashboard home
       settings/          Workspace settings: rename, members, invite placeholder
       workspaces/new/    Create-workspace page
+    onboarding/
+      layout.tsx         Onboarding shell (logo, logout, centered content)
+      page.tsx           Redirects to the workspace's current step
+      website/, email/, countries/, customer-types/, start/   One folder per step
   components/
     landing/             Landing page sections
     dashboard/            Sidebar, topbar, workspace switcher, user menu, mobile nav context
-    ui/                   Reusable primitives: Button, Input, Label, Select, Badge, Card, Table, FieldError
+    onboarding/           Step progress indicator
+    ui/                   Reusable primitives: Button, Input, Label, Select, Checkbox, Badge, Card, Table, FieldError
   config/
     site.ts              Site name, nav links, dashboard nav
+    onboarding.ts         Target country / customer type options, step order
   lib/
     cn.ts                clsx + tailwind-merge helper
     prisma.ts            Prisma client singleton (uses driver adapter)
     slug.ts              Workspace slug generation/uniqueness
     access-control.ts     Role constants + permission predicates + requireRole guard
     workspace.ts          Active-workspace resolution, workspace creation
+    onboarding.ts          Onboarding step guard, get-or-create, completion check
     actions/auth.ts        Server actions: signup, login, logout, requestPasswordReset
     actions/workspace.ts   Server actions: createWorkspace, switchWorkspace, renameWorkspace, inviteMember
+    actions/onboarding.ts  Server actions: one save action per step, startAnalysis
     validations/auth.ts    Zod schemas for signup/login forms
     validations/workspace.ts  Zod schemas for workspace name / invite forms
+    validations/onboarding.ts Zod schemas for each onboarding step
   types/next-auth.d.ts   Session/JWT type augmentation (id)
   generated/
     prisma/               Generated Prisma client (gitignored, not committed)
