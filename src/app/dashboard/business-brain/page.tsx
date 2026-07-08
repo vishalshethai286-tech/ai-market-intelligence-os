@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { requireActiveWorkspace } from "@/lib/workspace";
 import { canReviewBrainFacts } from "@/lib/access-control";
-import { getBusinessBrain, listBrainFacts } from "@/lib/business-brain/service";
+import { getBusinessBrain, getFeedbackCountsByFact, listBrainFacts } from "@/lib/business-brain/service";
 import type { BrainFact, BrainFactType } from "@/generated/prisma/client";
 import { Badge } from "@/components/ui/badge";
-import { FactRow } from "@/components/business-brain/fact-row";
+import { FactRow, type FeedbackKind } from "@/components/business-brain/fact-row";
 
 export const metadata: Metadata = {
   title: "Business Brain",
@@ -35,6 +35,12 @@ const SECTIONS: { label: string; types: BrainFactType[] }[] = [
   { label: "Competitors", types: ["COMPETITOR"] },
 ];
 
+/** Fact types with a learnable feedback signal wired into the page today. */
+const FEEDBACK_KIND_BY_FACT_TYPE: Partial<Record<BrainFactType, FeedbackKind>> = {
+  PRODUCT_OR_SERVICE: "product",
+  TARGET_INDUSTRY: "industry",
+};
+
 const BRAIN_STATUS_BADGE = {
   ACTIVE: { variant: "success" as const, label: "Active" },
   STALE: { variant: "warning" as const, label: "Stale" },
@@ -56,6 +62,9 @@ export default async function BusinessBrainPage() {
     list.push(fact);
     factsByType.set(fact.factType, list);
   }
+
+  const feedbackFactIds = facts.filter((fact) => FEEDBACK_KIND_BY_FACT_TYPE[fact.factType]).map((fact) => fact.id);
+  const feedbackCounts = await getFeedbackCountsByFact(active.workspace.id, feedbackFactIds);
 
   const brainBadge = brain ? BRAIN_STATUS_BADGE[brain.status] : null;
 
@@ -91,7 +100,13 @@ export default async function BusinessBrainPage() {
                 <h2 className="text-sm font-medium">{section.label}</h2>
                 <div className="mt-3 flex flex-col gap-2">
                   {sectionFacts.map((fact) => (
-                    <FactRow key={fact.id} fact={fact} canReview={canReview} />
+                    <FactRow
+                      key={fact.id}
+                      fact={fact}
+                      canReview={canReview}
+                      feedbackKind={FEEDBACK_KIND_BY_FACT_TYPE[fact.factType]}
+                      feedbackCounts={feedbackCounts.get(fact.id)}
+                    />
                   ))}
                 </div>
               </section>

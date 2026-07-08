@@ -75,6 +75,7 @@ model User {
   approvedProductServices  ProductService[]  @relation("ProductServiceApprovedBy")
   triggeredBrainUpdateRuns BrainUpdateRun[]  @relation("BrainUpdateRunTriggeredBy")
   verifiedBrainFacts       BrainFact[]       @relation("BrainFactVerifiedBy")
+  brainFeedbackGiven       BrainFeedback[]
 
   @@index([deletedAt])
   @@map("users")
@@ -104,6 +105,7 @@ model Workspace {
   brainEntities      BrainEntity[]
   brainRelationships BrainRelationship[]
   brainUpdateRuns    BrainUpdateRun[]
+  brainFeedback      BrainFeedback[]
   usageLogs          UsageLog[]
   apiCostLogs        ApiCostLog[]
   auditLogs          AuditLog[]
@@ -636,6 +638,7 @@ model BusinessBrain {
   entities      BrainEntity[]
   relationships BrainRelationship[]
   updateRuns    BrainUpdateRun[]
+  feedback      BrainFeedback[]
 
   @@index([status])
   @@map("business_brains")
@@ -693,6 +696,7 @@ model BrainEntity {
   facts             BrainFact[]
   relationshipsFrom BrainRelationship[] @relation("BrainRelationshipFromEntity")
   relationshipsTo   BrainRelationship[] @relation("BrainRelationshipToEntity")
+  feedback          BrainFeedback[]
 
   @@index([workspaceId, entityType])
   @@index([brainId])
@@ -766,11 +770,12 @@ model BrainFact {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  workspace  Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  brain      BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
-  source     BrainSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
-  entity     BrainEntity?  @relation(fields: [entityId], references: [id], onDelete: SetNull)
-  verifiedBy User?         @relation("BrainFactVerifiedBy", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+  workspace  Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain      BusinessBrain   @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  source     BrainSource?    @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  entity     BrainEntity?    @relation(fields: [entityId], references: [id], onDelete: SetNull)
+  verifiedBy User?           @relation("BrainFactVerifiedBy", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+  feedback   BrainFeedback[]
 
   @@index([workspaceId, factType])
   @@index([brainId])
@@ -813,4 +818,52 @@ model BrainUpdateRun {
   @@index([brainId])
   @@index([status])
   @@map("brain_update_runs")
+}
+
+/// A human's judgment used as a learning signal for future scoring and
+/// discovery — distinct from BrainFact.verificationStatus (a single mutable
+/// "is this fact still true" judgment). Feedback is append-only: a fact or
+/// entity can accumulate many feedback events over time, each contributing to
+/// a tally rather than overwriting the last one. GOOD_LEAD/BAD_LEAD have no
+/// lead data model yet, so they attach via `subjectLabel` instead of a
+/// fact/entity id until lead discovery exists.
+enum BrainFeedbackType {
+  GOOD_LEAD
+  BAD_LEAD
+  CORRECT_PRODUCT
+  INCORRECT_PRODUCT
+  GOOD_INDUSTRY
+  BAD_INDUSTRY
+}
+
+model BrainFeedback {
+  id          String @id @default(cuid())
+  workspaceId String @map("workspace_id")
+  brainId     String @map("brain_id")
+
+  feedbackType BrainFeedbackType @map("feedback_type")
+
+  entityId     String? @map("entity_id")
+  factId       String? @map("fact_id")
+  /// Freeform subject when there's no fact/entity row to attach to yet, e.g.
+  /// a lead's company name before lead discovery exists.
+  subjectLabel String? @map("subject_label")
+
+  note String?
+
+  userId String @map("user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain     BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+  entity    BrainEntity?  @relation(fields: [entityId], references: [id], onDelete: SetNull)
+  fact      BrainFact?    @relation(fields: [factId], references: [id], onDelete: SetNull)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, feedbackType])
+  @@index([brainId])
+  @@index([entityId])
+  @@index([factId])
+  @@map("brain_feedback")
 }

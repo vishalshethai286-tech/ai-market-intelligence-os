@@ -3,9 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { identifyCompetitors } from "./competitors";
 import { OPERATION_TYPE_LABELS } from "@/lib/company-profile/constants";
 import { TARGET_COUNTRIES } from "@/config/onboarding";
-import type { Prisma, BrainFactVerificationStatus } from "@/generated/prisma/client";
+import type { Prisma, BrainFactVerificationStatus, BrainFeedbackType } from "@/generated/prisma/client";
 
 export class BrainFactNotFoundError extends Error {}
+export class BrainFeedbackTargetError extends Error {}
+
+const POSITIVE_FEEDBACK_TYPES: readonly BrainFeedbackType[] = ["GOOD_LEAD", "CORRECT_PRODUCT", "GOOD_INDUSTRY"];
 
 export function getBusinessBrain(workspaceId: string) {
   return prisma.businessBrain.findUnique({ where: { workspaceId } });
@@ -44,6 +47,87 @@ export async function markFactVerification(
       ...(status === "CORRECT" ? { lastVerifiedAt: new Date(), freshnessScore: 1 } : {}),
     },
   });
+}
+
+/**
+ * Records a human's feedback signal — good/bad lead, correct/incorrect
+ * product, good/bad industry — for later use in scoring and discovery.
+ * Append-only: unlike `markFactVerification` (a single mutable "is this fact
+ * still true" judgment), a fact or entity can accumulate many feedback events
+ * over time, each contributing to a tally. `factId`/`entityId` are optional
+ * and mutually independent so feedback can attach to a fact, an entity, or
+ * neither (a freeform `subjectLabel`, e.g. a lead's company name before lead
+ * discovery exists).
+ */
+export async function recordFeedback(
+  workspaceId: string,
+  userId: string,
+  input: {
+    feedbackType: BrainFeedbackType;
+    factId?: string;
+    entityId?: string;
+    subjectLabel?: string;
+    note?: string;
+  },
+) {
+  const brain = await prisma.businessBrain.findUnique({ where: { workspaceId } });
+  if (!brain) {
+    throw new BrainFeedbackTargetError("This workspace doesn't have a Business Brain yet.");
+  }
+
+  if (input.factId) {
+    const fact = await prisma.brainFact.findFirst({ where: { id: input.factId, workspaceId } });
+    if (!fact) {
+      throw new BrainFeedbackTargetError("That fact doesn't exist in this workspace.");
+    }
+  }
+  if (input.entityId) {
+    const entity = await prisma.brainEntity.findFirst({ where: { id: input.entityId, workspaceId } });
+    if (!entity) {
+      throw new BrainFeedbackTargetError("That entity doesn't exist in this workspace.");
+    }
+  }
+
+  return prisma.brainFeedback.create({
+    data: {
+      workspaceId,
+      brainId: brain.id,
+      userId,
+      feedbackType: input.feedbackType,
+      factId: input.factId ?? null,
+      entityId: input.entityId ?? null,
+      subjectLabel: input.subjectLabel ?? null,
+      note: input.note ?? null,
+    },
+  });
+}
+
+/** Tally of positive vs. negative feedback per fact, keyed by factId, for display alongside each fact. */
+export async function getFeedbackCountsByFact(
+  workspaceId: string,
+  factIds: string[],
+): Promise<Map<string, { positive: number; negative: number }>> {
+  const counts = new Map<string, { positive: number; negative: number }>();
+  if (factIds.length === 0) return counts;
+
+  const rows = await prisma.brainFeedback.groupBy({
+    by: ["factId", "feedbackType"],
+    where: { workspaceId, factId: { in: factIds } },
+    _count: { _all: true },
+  });
+
+  for (const row of rows) {
+    if (!row.factId) continue;
+    const entry = counts.get(row.factId) ?? { positive: 0, negative: 0 };
+    if (POSITIVE_FEEDBACK_TYPES.includes(row.feedbackType)) {
+      entry.positive += row._count._all;
+    } else {
+      entry.negative += row._count._all;
+    }
+    counts.set(row.factId, entry);
+  }
+
+  return counts;
 }
 
 function countryName(code: string): string {
