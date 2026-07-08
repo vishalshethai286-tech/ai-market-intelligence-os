@@ -3,10 +3,21 @@ import { prisma } from "@/lib/prisma";
 import { identifyCompetitors } from "./competitors";
 import { OPERATION_TYPE_LABELS } from "@/lib/company-profile/constants";
 import { TARGET_COUNTRIES } from "@/config/onboarding";
-import type { Prisma, BrainFactVerificationStatus, BrainFeedbackType } from "@/generated/prisma/client";
+import { canStartNewAnalysis, runAndStoreWebsiteAnalysis } from "@/lib/website-analysis";
+import { generateProductServices } from "@/lib/product-discovery/service";
+import type {
+  Prisma,
+  BrainEntityType,
+  BrainFactType,
+  BrainFactVerificationStatus,
+  BrainFeedbackType,
+  BrainUpdateTrigger,
+} from "@/generated/prisma/client";
 
 export class BrainFactNotFoundError extends Error {}
 export class BrainFeedbackTargetError extends Error {}
+export class BrainNotReadyError extends Error {}
+export class BrainRefreshCooldownError extends Error {}
 
 const POSITIVE_FEEDBACK_TYPES: readonly BrainFeedbackType[] = ["GOOD_LEAD", "CORRECT_PRODUCT", "GOOD_INDUSTRY"];
 
@@ -428,5 +439,481 @@ export async function buildInitialBrain(workspaceId: string) {
       },
     });
     return brain;
+  }
+}
+
+type FactCounters = { created: number; updated: number; expired: number; flagged: number };
+
+/**
+ * Reconciles a single-value fact tied to the self entity (company name,
+ * description, industry, etc.) against a freshly extracted value:
+ *  - no existing fact → create one
+ *  - existing value unchanged → just re-confirm (bump freshness/source),
+ *    clearing any stale pending suggestion
+ *  - existing value changed, human hasn't verified it CORRECT → safe to
+ *    update in place, resetting verification (a changed value needs
+ *    re-review, whatever the previous judgment was)
+ *  - existing value changed, human HAS verified it CORRECT → preserve the
+ *    approved value untouched, flag NEEDS_REVIEW, and stash the proposed
+ *    value in `pendingFactValue` so the conflict is visible, not just flagged
+ */
+async function reconcileScalarFact(
+  tx: Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    brainId: string;
+    entityId: string;
+    factType: BrainFactType;
+    newValue: string | null;
+    confidenceScore: number;
+    sourceId: string | null;
+    sourceUrl: string | null;
+    counters: FactCounters;
+  },
+) {
+  const { workspaceId, brainId, entityId, factType, newValue, confidenceScore, sourceId, sourceUrl, counters } = params;
+  if (!newValue) return;
+
+  const existing = await tx.brainFact.findFirst({ where: { workspaceId, brainId, factType, entityId } });
+  if (!existing) {
+    await tx.brainFact.create({
+      data: {
+        workspaceId,
+        brainId,
+        entityId,
+        sourceId,
+        sourceUrl,
+        factType,
+        factValue: newValue,
+        confidenceScore,
+        lastVerifiedAt: new Date(),
+        freshnessScore: 1,
+      },
+    });
+    counters.created += 1;
+    return;
+  }
+
+  const unchanged = existing.factValue.trim().toLowerCase() === newValue.trim().toLowerCase();
+  if (unchanged) {
+    await tx.brainFact.update({
+      where: { id: existing.id },
+      data: { sourceId, sourceUrl, lastVerifiedAt: new Date(), freshnessScore: 1, pendingFactValue: null },
+    });
+    return;
+  }
+
+  if (existing.verificationStatus === "CORRECT") {
+    await tx.brainFact.update({
+      where: { id: existing.id },
+      data: { verificationStatus: "NEEDS_REVIEW", pendingFactValue: newValue },
+    });
+    counters.flagged += 1;
+    return;
+  }
+
+  await tx.brainFact.update({
+    where: { id: existing.id },
+    data: {
+      factValue: newValue,
+      confidenceScore,
+      sourceId,
+      sourceUrl,
+      lastVerifiedAt: new Date(),
+      freshnessScore: 1,
+      verificationStatus: "UNVERIFIED",
+      verifiedByUserId: null,
+      pendingFactValue: null,
+    },
+  });
+  counters.updated += 1;
+}
+
+/**
+ * Reconciles a plain list-of-values fact (countries served, target
+ * industries, buyer types, keywords — no entity attached) against a fresh
+ * list: new values become new facts, values no longer present are "expired"
+ * (freshnessScore reset to 0, never deleted) unless a human verified them
+ * CORRECT, in which case they're preserved regardless of whether they still
+ * show up in the latest extraction.
+ */
+async function reconcileListFacts(
+  tx: Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    brainId: string;
+    factType: BrainFactType;
+    newValues: string[];
+    confidenceScore: number;
+    sourceId: string | null;
+    sourceUrl: string | null;
+    counters: FactCounters;
+  },
+) {
+  const { workspaceId, brainId, factType, newValues, confidenceScore, sourceId, sourceUrl, counters } = params;
+
+  const existingFacts = await tx.brainFact.findMany({ where: { workspaceId, brainId, factType, entityId: null } });
+  const existingKeys = new Set(existingFacts.map((f) => f.factValue.trim().toLowerCase()));
+  const newKeys = new Set(newValues.map((v) => v.trim().toLowerCase()));
+
+  const toCreate = newValues.filter((v) => !existingKeys.has(v.trim().toLowerCase()));
+  if (toCreate.length > 0) {
+    await tx.brainFact.createMany({
+      data: toCreate.map((value) => ({
+        workspaceId,
+        brainId,
+        factType,
+        factValue: value,
+        confidenceScore,
+        sourceId,
+        sourceUrl,
+        lastVerifiedAt: new Date(),
+        freshnessScore: 1,
+      })),
+    });
+    counters.created += toCreate.length;
+  }
+
+  for (const fact of existingFacts) {
+    if (newKeys.has(fact.factValue.trim().toLowerCase())) continue;
+    if (fact.verificationStatus === "CORRECT") continue;
+    if (fact.freshnessScore === 0) continue;
+    await tx.brainFact.update({ where: { id: fact.id }, data: { freshnessScore: 0 } });
+    counters.expired += 1;
+  }
+}
+
+/**
+ * Reconciles a list of named items that each need their own BrainEntity plus
+ * a relationship from the self entity (certifications, products, competitors)
+ * — matched by name (case-insensitive). Same create/expire/preserve semantics
+ * as `reconcileListFacts`, but a genuinely new item also gets an entity and
+ * relationship, not just a fact.
+ */
+async function reconcileEntityLinkedFacts(
+  tx: Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    brainId: string;
+    factType: BrainFactType;
+    entityType: BrainEntityType;
+    relationshipType: string;
+    fromEntityId: string;
+    items: { name: string; description?: string | null; confidenceScore: number }[];
+    sourceId: string | null;
+    sourceUrl: string | null;
+    counters: FactCounters;
+  },
+) {
+  const { workspaceId, brainId, factType, entityType, relationshipType, fromEntityId, items, sourceId, sourceUrl, counters } = params;
+
+  const existingFacts = await tx.brainFact.findMany({ where: { workspaceId, brainId, factType } });
+  const existingKeys = new Set(existingFacts.map((f) => f.factValue.trim().toLowerCase()));
+  const newKeys = new Set(items.map((item) => item.name.trim().toLowerCase()));
+
+  for (const item of items) {
+    if (existingKeys.has(item.name.trim().toLowerCase())) continue;
+
+    const entity = await tx.brainEntity.create({
+      data: {
+        workspaceId,
+        brainId,
+        entityType,
+        name: item.name,
+        description: item.description ?? null,
+        confidenceScore: item.confidenceScore,
+      },
+    });
+    await tx.brainRelationship.create({
+      data: {
+        workspaceId,
+        brainId,
+        sourceId,
+        fromEntityId,
+        toEntityId: entity.id,
+        relationshipType,
+        confidenceScore: item.confidenceScore,
+      },
+    });
+    await tx.brainFact.create({
+      data: {
+        workspaceId,
+        brainId,
+        entityId: entity.id,
+        sourceId,
+        sourceUrl,
+        factType,
+        factValue: item.name,
+        confidenceScore: item.confidenceScore,
+        lastVerifiedAt: new Date(),
+        freshnessScore: 1,
+      },
+    });
+    counters.created += 1;
+  }
+
+  for (const fact of existingFacts) {
+    if (newKeys.has(fact.factValue.trim().toLowerCase())) continue;
+    if (fact.verificationStatus === "CORRECT") continue;
+    if (fact.freshnessScore === 0) continue;
+    await tx.brainFact.update({ where: { id: fact.id }, data: { freshnessScore: 0 } });
+    counters.expired += 1;
+  }
+}
+
+export type BrainRefreshResult = {
+  changed: boolean;
+  created: number;
+  updated: number;
+  expired: number;
+  flagged: number;
+  error?: string;
+};
+
+/**
+ * Refreshes an already-built Business Brain: re-checks the workspace's
+ * website, and if (and only if) the homepage or its identified pages
+ * actually changed since the last check, re-runs product/service discovery
+ * (`generateProductServices` — already preserves APPROVED rows) and
+ * competitor identification, then reconciles every fact category against the
+ * current CompanyProfile/ProductService/onboarding state. Skipping the two
+ * Claude calls entirely when nothing changed is the concrete form "detect
+ * changed pages" takes here — it's a cost gate, not just a label.
+ *
+ * User-verified CORRECT facts are never silently overwritten: a differing
+ * re-extracted value flags the fact NEEDS_REVIEW with the proposal kept in
+ * `pendingFactValue` instead. Everything else (unverified/incorrect/
+ * needs-review facts, and list items no longer found) updates or expires
+ * normally. Site-fetch failures are recorded on the BrainUpdateRun and
+ * returned as a soft error rather than thrown, matching `buildInitialBrain`'s
+ * best-effort posture — but a brain that isn't built yet, or has no website
+ * to check, throws immediately (nothing to run).
+ */
+export async function refreshBrain(
+  workspaceId: string,
+  userId: string | null,
+  trigger: BrainUpdateTrigger = "MANUAL",
+): Promise<BrainRefreshResult> {
+  const brain = await prisma.businessBrain.findUnique({ where: { workspaceId } });
+  if (!brain || brain.status === "INITIALIZING") {
+    throw new BrainNotReadyError("Build the initial Business Brain before refreshing it.");
+  }
+
+  const canStart = await canStartNewAnalysis(workspaceId);
+  if (!canStart) {
+    throw new BrainRefreshCooldownError("A website check ran recently for this workspace — wait a minute before refreshing again.");
+  }
+
+  const [onboarding, previousAnalysis] = await Promise.all([
+    prisma.workspaceOnboarding.findUnique({ where: { workspaceId } }),
+    prisma.websiteAnalysis.findFirst({ where: { workspaceId, status: "COMPLETED" }, orderBy: { createdAt: "desc" } }),
+  ]);
+
+  const url = onboarding?.companyWebsite || previousAnalysis?.url;
+  if (!url) {
+    throw new BrainNotReadyError("This workspace has no analyzed website to refresh from.");
+  }
+
+  const run = await prisma.brainUpdateRun.create({
+    data: { workspaceId, brainId: brain.id, status: "RUNNING", trigger, triggeredByUserId: userId, startedAt: new Date() },
+  });
+
+  const counters: FactCounters = { created: 0, updated: 0, expired: 0, flagged: 0 };
+
+  try {
+    const analysis = await runAndStoreWebsiteAnalysis(workspaceId, url);
+    if (analysis.status !== "COMPLETED") {
+      throw new Error(analysis.error ?? "Could not re-check the website.");
+    }
+
+    const homepageChanged = !previousAnalysis || previousAnalysis.visibleText !== analysis.visibleText;
+    const pagesChanged =
+      !previousAnalysis || JSON.stringify(previousAnalysis.identifiedPages) !== JSON.stringify(analysis.identifiedPages);
+
+    if (!homepageChanged && !pagesChanged) {
+      await Promise.all([
+        prisma.businessBrain.update({ where: { id: brain.id }, data: { status: "ACTIVE", lastUpdatedAt: new Date() } }),
+        prisma.brainUpdateRun.update({ where: { id: run.id }, data: { status: "COMPLETED", completedAt: new Date() } }),
+      ]);
+      return { changed: false, ...counters };
+    }
+
+    // Best-effort: a discovery failure shouldn't sink the rest of the refresh.
+    await generateProductServices(workspaceId).catch(() => null);
+
+    const [profile, products, workspace] = await Promise.all([
+      prisma.companyProfile.findUnique({ where: { workspaceId } }),
+      prisma.productService.findMany({ where: { workspaceId, status: { not: "REJECTED" } } }),
+      prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } }),
+    ]);
+
+    const targetCountryNames = (onboarding?.targetCountries ?? []).map(countryName);
+    const countryNames = dedupe([...(profile?.countriesServed ?? []), ...targetCountryNames]);
+    const targetIndustries = dedupe(products.flatMap((p) => p.targetIndustries));
+    const buyerTypes = dedupe(products.flatMap((p) => p.buyerTypes));
+    const keywords = dedupe(products.flatMap((p) => p.keywords));
+
+    const competitors = profile
+      ? await identifyCompetitors({
+          companyName: profile.companyName || workspace.name,
+          industry: profile.industry ?? "",
+          businessDescription: profile.businessDescription ?? "",
+          keyProductsServices: profile.keyProductsServices,
+          countriesServed: countryNames,
+        })
+      : [];
+
+    // The self entity is always the first ORGANIZATION entity created for this
+    // brain — buildInitialBrain creates it before any competitor entities,
+    // and refresh never creates a second one.
+    const selfEntity = await prisma.brainEntity.findFirst({
+      where: { workspaceId, brainId: brain.id, entityType: "ORGANIZATION" },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!selfEntity) {
+      throw new Error("This workspace's Business Brain is missing its company entity.");
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const source = await tx.brainSource.create({
+        data: {
+          workspaceId,
+          brainId: brain.id,
+          websiteAnalysisId: analysis.id,
+          sourceType: "WEBSITE_PAGE",
+          url: analysis.url,
+          title: analysis.title,
+          fetchedAt: analysis.fetchedAt,
+        },
+      });
+
+      const scalarInputs: [BrainFactType, string | null][] = [
+        ["COMPANY_NAME", profile?.companyName || null],
+        ["BUSINESS_DESCRIPTION", profile?.businessDescription || null],
+        ["INDUSTRY", profile?.industry || null],
+        ["BUSINESS_MODEL", profile?.businessModel || null],
+        ["HEADQUARTERS", profile?.headquarters || null],
+        ["OPERATION_TYPE", profile && profile.operationType !== "UNKNOWN" ? OPERATION_TYPE_LABELS[profile.operationType] : null],
+      ];
+      for (const [factType, value] of scalarInputs) {
+        await reconcileScalarFact(tx, {
+          workspaceId,
+          brainId: brain.id,
+          entityId: selfEntity.id,
+          factType,
+          newValue: value,
+          confidenceScore: profile?.confidenceScore ?? 0,
+          sourceId: source.id,
+          sourceUrl: source.url,
+          counters,
+        });
+      }
+
+      await reconcileListFacts(tx, {
+        workspaceId,
+        brainId: brain.id,
+        factType: "COUNTRY_SERVED",
+        newValues: countryNames,
+        confidenceScore: profile?.confidenceScore ?? 0,
+        sourceId: source.id,
+        sourceUrl: source.url,
+        counters,
+      });
+      await reconcileListFacts(tx, {
+        workspaceId,
+        brainId: brain.id,
+        factType: "TARGET_INDUSTRY",
+        newValues: targetIndustries,
+        confidenceScore: 0,
+        sourceId: source.id,
+        sourceUrl: source.url,
+        counters,
+      });
+      await reconcileListFacts(tx, {
+        workspaceId,
+        brainId: brain.id,
+        factType: "BUYER_TYPE",
+        newValues: buyerTypes,
+        confidenceScore: 0,
+        sourceId: source.id,
+        sourceUrl: source.url,
+        counters,
+      });
+      await reconcileListFacts(tx, {
+        workspaceId,
+        brainId: brain.id,
+        factType: "KEYWORD",
+        newValues: keywords,
+        confidenceScore: 0,
+        sourceId: source.id,
+        sourceUrl: source.url,
+        counters,
+      });
+
+      if (profile) {
+        await reconcileEntityLinkedFacts(tx, {
+          workspaceId,
+          brainId: brain.id,
+          factType: "CERTIFICATION",
+          entityType: "CERTIFICATION",
+          relationshipType: "CERTIFIED_BY",
+          fromEntityId: selfEntity.id,
+          items: dedupe(profile.certifications).map((name) => ({ name, confidenceScore: profile.confidenceScore })),
+          sourceId: source.id,
+          sourceUrl: source.url,
+          counters,
+        });
+      }
+
+      await reconcileEntityLinkedFacts(tx, {
+        workspaceId,
+        brainId: brain.id,
+        factType: "PRODUCT_OR_SERVICE",
+        entityType: "PRODUCT",
+        relationshipType: "OFFERS",
+        fromEntityId: selfEntity.id,
+        items: products.map((p) => ({ name: p.name, description: p.description, confidenceScore: p.confidenceScore })),
+        sourceId: source.id,
+        sourceUrl: source.url,
+        counters,
+      });
+
+      await reconcileEntityLinkedFacts(tx, {
+        workspaceId,
+        brainId: brain.id,
+        factType: "COMPETITOR",
+        entityType: "ORGANIZATION",
+        relationshipType: "COMPETES_WITH",
+        fromEntityId: selfEntity.id,
+        items: competitors.map((c) => ({ name: c.name, description: c.reason, confidenceScore: c.confidenceScore })),
+        sourceId: null,
+        sourceUrl: null,
+        counters,
+      });
+    });
+
+    await Promise.all([
+      prisma.businessBrain.update({ where: { id: brain.id }, data: { status: "ACTIVE", lastUpdatedAt: new Date() } }),
+      prisma.brainUpdateRun.update({
+        where: { id: run.id },
+        data: {
+          status: "COMPLETED",
+          completedAt: new Date(),
+          factsCreated: counters.created,
+          factsUpdated: counters.updated,
+          factsExpired: counters.expired,
+          factsFlagged: counters.flagged,
+        },
+      }),
+    ]);
+
+    return { changed: true, ...counters };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error refreshing the Business Brain.";
+    await prisma.brainUpdateRun.update({
+      where: { id: run.id },
+      data: { status: "FAILED", error: message, completedAt: new Date() },
+    });
+    return { changed: false, ...counters, error: message };
   }
 }

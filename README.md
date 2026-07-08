@@ -117,7 +117,8 @@ A per-workspace knowledge base that aggregates everything this app learns about 
 - **BrainSource** — where a piece of knowledge came from (`sourceType`: website page / document / manual entry / third-party API), optionally traceable back to the `WebsiteAnalysis` run that produced it.
 - **BrainEntity** — a named "node" the brain has identified (organization, person, product, location, certification, industry). `BrainFact` can attach to the entity it's about.
 - **BrainRelationship** — a directed edge between two `BrainEntity` rows (`fromEntityId` → `toEntityId`), e.g. "Acme Corp" —`CERTIFIED_BY`→ "ISO 9001". `relationshipType` is free text (open-ended vocabulary), unlike the closed `factType`/`entityType`/`sourceType` enums.
-- **BrainUpdateRun** — history of refresh operations (status, trigger, facts created/updated/expired, optional `triggeredByUserId`), the same run-history pattern as `WebsiteAnalysis`.
+- **BrainUpdateRun** — history of refresh operations (status, trigger, facts created/updated/expired/**flagged**, optional `triggeredByUserId`), the same run-history pattern as `WebsiteAnalysis`.
+- **BrainFact.pendingFactValue** — set only when a refresh finds a different value for a fact a human already verified `CORRECT`; holds the newly proposed value while `factValue` stays untouched and `verificationStatus` flips to `NEEDS_REVIEW`, so the conflict is visible instead of silently overwritten or silently dropped.
 - **Cascade rules** (verified against a live DB): deleting a `BrainSource` or `BrainEntity` that a fact/relationship merely *references* sets that reference to `null` rather than deleting the fact/relationship; deleting an entity that's the `fromEntity`/`toEntity` of a relationship cascades and removes that relationship; deleting the workspace cascades through the entire graph.
 
 ### Initial brain builder
@@ -142,6 +143,24 @@ A per-workspace knowledge base that aggregates everything this app learns about 
 **BrainFeedback** is an append-only log distinct from `BrainFact.verificationStatus` — a fact/entity can accumulate many feedback events over time (a learning signal for future scoring/discovery), rather than one mutable "is this still true" judgment. It stores `feedbackType` (`GOOD_LEAD` / `BAD_LEAD` / `CORRECT_PRODUCT` / `INCORRECT_PRODUCT` / `GOOD_INDUSTRY` / `BAD_INDUSTRY`), optional `factId`/`entityId` (`SetNull` on delete, so removing the underlying fact/entity preserves the feedback history instead of destroying the signal), an optional freeform `subjectLabel` for subjects with no brain row yet, and the `userId` who gave it.
 
 `src/lib/business-brain/service.ts` — **`recordFeedback()`** validates the target fact/entity belongs to the workspace before writing, and **`getFeedbackCountsByFact()`** tallies positive vs. negative feedback per fact for display. The Business Brain page wires **Correct product** / **Incorrect product** buttons onto `PRODUCT_OR_SERVICE` facts and **Good industry** / **Bad industry** buttons onto `TARGET_INDUSTRY` facts, each showing a live tally next to the buttons, gated by the same `canReviewBrainFacts()` role check as fact verification. `GOOD_LEAD`/`BAD_LEAD` exist in the schema/service today for forward-compatibility but have no UI yet — the app has no lead-discovery feature or lead data model to attach them to.
+
+### Refresh
+
+`src/lib/business-brain/service.ts` — **`refreshBrain(workspaceId, userId, trigger)`** re-checks an already-built brain against the live website, rather than rebuilding it from scratch:
+
+1. **Recheck website content** — re-runs `runAndStoreWebsiteAnalysis()` against the workspace's website, producing a fresh `WebsiteAnalysis` row.
+2. **Detect changed pages** — compares the new analysis's `visibleText`/`identifiedPages` against the previous one. If neither changed, the refresh stops here (`BrainUpdateRun` completes with all-zero counts) — **this is a real cost gate**, not just a label: it skips both Claude calls below entirely when the site is unchanged.
+3. **Detect new products/services** — if the site did change, re-runs `generateProductServices()` (the same regenerate used by the Products & Services page — new items land as `PENDING_REVIEW`, `APPROVED` rows are never touched), then re-runs competitor identification.
+4. **Update facts / preserve approved facts / flag conflicts** — reconciles every fact category (company-summary scalars, countries/industries/buyer-types/keywords, certifications/products/competitors) against the now-current `CompanyProfile`/`ProductService` state:
+   - a brand-new value → a new `BrainFact` (+ entity/relationship where applicable)
+   - an existing value that's unchanged → just re-confirmed (`lastVerifiedAt`/`freshnessScore` refreshed)
+   - an existing value that changed, not yet verified `CORRECT` → updated in place, `verificationStatus` reset to `UNVERIFIED` (a changed value needs re-review regardless of the old judgment)
+   - an existing value that changed, but a human already verified it `CORRECT` → **preserved untouched**, flagged `NEEDS_REVIEW`, with the new proposal kept in `pendingFactValue` (shown inline on the Business Brain page as "Suggested update from the latest refresh: …")
+   - a list item (country/industry/buyer type/keyword/product/competitor) no longer found → "expired" (`freshnessScore` reset to `0`, never deleted) unless verified `CORRECT`, which is preserved regardless
+
+A cooldown (`canStartNewAnalysis()`, the same one the website analyzer itself uses) prevents back-to-back refreshes from hammering the target site. A site-fetch failure mid-refresh is recorded on the `BrainUpdateRun` (`FAILED`, with `error` set) and returned as a soft error rather than thrown, matching `buildInitialBrain`'s best-effort posture; calling before the initial brain exists, or with no website to check, throws immediately instead.
+
+**Manual refresh button**: `refreshBrainAction()` (`src/lib/actions/business-brain.ts`) wraps this, gated by `canReviewBrainFacts()`, and the Business Brain page renders a **Refresh brain** button (`src/components/business-brain/refresh-brain-button.tsx`) next to the status badge, showing a one-line summary ("Refreshed: 3 new, 1 updated, 2 expired, 1 flagged for review.") or an error inline.
 
 ## Dashboard layout & UI components
 

@@ -5,6 +5,7 @@ import { getBusinessBrain, getFeedbackCountsByFact, listBrainFacts } from "@/lib
 import type { BrainFact, BrainFactType } from "@/generated/prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { FactRow, type FeedbackKind } from "@/components/business-brain/fact-row";
+import { RefreshBrainButton } from "@/components/business-brain/refresh-brain-button";
 
 export const metadata: Metadata = {
   title: "Business Brain",
@@ -77,7 +78,15 @@ export default async function BusinessBrainPage() {
             Everything the AI has learned about your company. Mark facts correct, incorrect, or needing review.
           </p>
         </div>
-        {brainBadge && <Badge variant={brainBadge.variant}>{brainBadge.label}</Badge>}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            {brainBadge && <Badge variant={brainBadge.variant}>{brainBadge.label}</Badge>}
+            {canReview && brain && <RefreshBrainButton />}
+          </div>
+          {brain?.lastUpdatedAt && (
+            <p className="text-xs text-black/50 dark:text-white/50">Last updated {brain.lastUpdatedAt.toLocaleString()}</p>
+          )}
+        </div>
       </div>
 
       {(!brain || facts.length === 0) && (

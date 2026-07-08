@@ -767,6 +767,14 @@ model BrainFact {
   verificationStatus BrainFactVerificationStatus @default(UNVERIFIED) @map("verification_status")
   verifiedByUserId   String?                     @map("verified_by_user_id")
 
+  /// Set by a refresh when re-extraction finds a different value for a fact
+  /// a human has already verified CORRECT — the existing (approved) value is
+  /// preserved in `factValue` rather than overwritten, this holds the newly
+  /// proposed value so the review UI can show what changed, and
+  /// verificationStatus flips to NEEDS_REVIEW. Cleared once the conflict is
+  /// resolved (the value stops differing, or a human re-verifies).
+  pendingFactValue String? @map("pending_fact_value")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -798,6 +806,9 @@ model BrainUpdateRun {
   factsCreated Int @default(0) @map("facts_created")
   factsUpdated Int @default(0) @map("facts_updated")
   factsExpired Int @default(0) @map("facts_expired")
+  /// Facts a human had verified CORRECT whose re-extracted value differed —
+  /// left untouched (see BrainFact.pendingFactValue) rather than overwritten.
+  factsFlagged Int @default(0) @map("facts_flagged")
 
   /// Set when status is FAILED.
   error String?

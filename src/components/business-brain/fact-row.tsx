@@ -74,6 +74,12 @@ export function FactRow({
         {fact.lastVerifiedAt && <span>Last verified {fact.lastVerifiedAt.toLocaleDateString()}</span>}
       </p>
 
+      {fact.pendingFactValue && (
+        <p className="mt-1 text-xs text-amber-700 dark:text-amber-500">
+          Suggested update from the latest refresh: <span className="font-medium">{fact.pendingFactValue}</span>
+        </p>
+      )}
+
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Badge variant={badge.variant}>{badge.label}</Badge>
         {canReview && (
