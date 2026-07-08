@@ -25,7 +25,8 @@ Multi-tenant schema defined in [`prisma/schema.prisma`](prisma/schema.prisma):
 - **WebsiteAnalysis** — raw result of analyzing a workspace's homepage (see [Website Analyzer](#website-analyzer)).
 - **CompanyProfile** — AI-extracted company profile built from a `WebsiteAnalysis` (see [Company Profile](#company-profile-ai-extraction)).
 - **ProductService** — AI-discovered product/service catalog entries built from a `WebsiteAnalysis` (see [Product/Service Discovery](#productservice-discovery-ai-extraction)).
-- **BusinessBrain**, **BrainFact**, **BrainSource**, **BrainEntity**, **BrainRelationship**, **BrainUpdateRun** — a per-workspace knowledge base, built from the company profile/product catalog after onboarding (see [AI Business Brain](#ai-business-brain)).
+- **BusinessBrain**, **BrainFact**, **BrainSource**, **BrainEntity**, **BrainRelationship**, **BrainUpdateRun**, **BrainFeedback** — a per-workspace knowledge base, built from the company profile/product catalog after onboarding (see [AI Business Brain](#ai-business-brain)).
+- **SearchQuery** — AI-generated candidate search queries grounded in a workspace's Business Brain (see [AI Search Query Generator](#ai-search-query-generator)).
 
 Soft delete (`deletedAt`) is used on entities users can remove (User, Workspace, WorkspaceMember, Subscription). `Plan` and `Role` are reference/config data — retire with `isActive`/`isSystem` flags instead of deleting, since Subscriptions and memberships reference them. The three log tables (`UsageLog`, `ApiCostLog`, `AuditLog`) are append-only: no `updatedAt` or `deletedAt`, since rows are written once and never mutated.
 
@@ -170,6 +171,16 @@ A cooldown (`canStartNewAnalysis()`, the same one the website analyzer itself us
 - **Selection**: `search()` uses the `provider` option if given, otherwise the `SEARCH_PROVIDER` env var, otherwise falls back to `MOCK` — so the app never breaks in an environment with no search API keys configured. An empty/whitespace query short-circuits to `[]` without calling any provider.
 - **`maxResults`** is honored by every provider and capped at `MAX_MAX_RESULTS` (`src/lib/search/constants.ts`); Google CSE additionally caps at its own hard limit of 10 per request.
 - Not wired into any feature yet — this is the abstraction layer only, ready for a caller (e.g. a future lead/market-signal discovery feature) to import from `@/lib/search`.
+
+## AI Search Query Generator
+
+`src/lib/search-queries/` — generates candidate search-engine queries for lead/market discovery, grounded in a workspace's [Business Brain](#ai-business-brain), and stores them as **SearchQuery** rows. This only generates and stores query strings; it doesn't execute them — that's what [Search Service](#search-service) is for, once something wires the two together.
+
+- **Categories** (`SearchQueryCategory`): `TARGET_CUSTOMER` (general prospecting), `BUYER_TYPE` (one per buyer type), `INDUSTRY_COMPANY` (one per target industry), `PRODUCT_SERVICE_BUYER` (one per product/service), `COUNTRY_SPECIFIC` (one per country served), `VENDOR_REGISTRATION` (supplier/procurement portals), `PROJECT` (tenders/RFPs relevant to the company's products or industries).
+- **`generateAndStoreSearchQueries(workspaceId)`** (`src/lib/search-queries/service.ts`) aggregates the workspace's current `BrainFact`s (company name, industry, description, products, target industries, buyer types, countries served, keywords, competitors) into one Claude call (`claude-opus-4-8`, structured JSON output across all 7 categories at once) — mirroring the `product-discovery`/`company-profile` module layout (`constants.ts`/`schema.ts`/`prompt.ts`/`generate.ts`). Claude is instructed to ground every query in the given facts and return an empty array for a category rather than inventing filler when there's nothing to ground it in.
+- Unlike `identifyCompetitors` (best-effort enrichment that fails open), a generation failure **throws** — this is the feature's main deliverable, not a secondary enrichment, so a refusal/truncation/malformed response surfaces as a typed `QueryGenerationError` rather than silently returning nothing. Requires an already-built Business Brain (`BrainNotReadyError` if missing/still `INITIALIZING`) and at least a company name, product, or target industry to ground queries in (`InsufficientBrainContextError` otherwise).
+- **SearchQuery** rows are immutable once created (`workspaceId`+`query` is unique, so `createMany({ skipDuplicates: true })` silently dedupes exact repeats across regenerations rather than erroring or double-storing) and record `category`, `query`, and an optional `basedOn` note (which fact(s) grounded it, e.g. `"Industry: Manufacturing"`).
+- Not wired into any UI yet — call `generateAndStoreSearchQueries()`/`listSearchQueries()` directly from `@/lib/search-queries/service` until a page/action is built.
 
 ## Dashboard layout & UI components
 

@@ -106,6 +106,7 @@ model Workspace {
   brainRelationships BrainRelationship[]
   brainUpdateRuns    BrainUpdateRun[]
   brainFeedback      BrainFeedback[]
+  searchQueries      SearchQuery[]
   usageLogs          UsageLog[]
   apiCostLogs        ApiCostLog[]
   auditLogs          AuditLog[]
@@ -639,6 +640,7 @@ model BusinessBrain {
   relationships BrainRelationship[]
   updateRuns    BrainUpdateRun[]
   feedback      BrainFeedback[]
+  searchQueries SearchQuery[]
 
   @@index([status])
   @@map("business_brains")
@@ -877,4 +879,52 @@ model BrainFeedback {
   @@index([entityId])
   @@index([factId])
   @@map("brain_feedback")
+}
+
+// ---------------------------------------------------------------------------
+// AI search query generator
+//
+// Generates candidate search-engine queries for lead/market discovery,
+// grounded in a workspace's Business Brain (its products, industries, buyer
+// types, countries served). A SearchQuery is just a query string to run
+// later — src/lib/search executes queries against a provider; this only
+// generates and stores candidates.
+// ---------------------------------------------------------------------------
+
+enum SearchQueryCategory {
+  TARGET_CUSTOMER
+  BUYER_TYPE
+  INDUSTRY_COMPANY
+  PRODUCT_SERVICE_BUYER
+  COUNTRY_SPECIFIC
+  VENDOR_REGISTRATION
+  PROJECT
+}
+
+/// An AI-generated candidate search query. Immutable once created (no
+/// updatedAt) — regenerating adds new rows rather than editing old ones;
+/// `@@unique([workspaceId, query])` means an identical query string from a
+/// later regeneration is silently deduped rather than stored twice.
+model SearchQuery {
+  id          String @id @default(cuid())
+  workspaceId String @map("workspace_id")
+  brainId     String @map("brain_id")
+
+  category SearchQueryCategory
+  query    String
+
+  /// Which brain fact(s) this query was grounded in, e.g. "Industry:
+  /// Manufacturing" or "Product: Industrial Widget A" — lets a reviewer see
+  /// why this query was suggested.
+  basedOn String? @map("based_on")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brain     BusinessBrain @relation(fields: [brainId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, query])
+  @@index([workspaceId, category])
+  @@index([brainId])
+  @@map("search_queries")
 }
