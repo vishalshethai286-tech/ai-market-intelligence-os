@@ -162,6 +162,15 @@ A cooldown (`canStartNewAnalysis()`, the same one the website analyzer itself us
 
 **Manual refresh button**: `refreshBrainAction()` (`src/lib/actions/business-brain.ts`) wraps this, gated by `canReviewBrainFacts()`, and the Business Brain page renders a **Refresh brain** button (`src/components/business-brain/refresh-brain-button.tsx`) next to the status badge, showing a one-line summary ("Refreshed: 3 new, 1 updated, 2 expired, 1 flagged for review.") or an error inline.
 
+## Search Service
+
+`src/lib/search/` — a provider-agnostic search abstraction: `search(query, options)` returns a uniform `SearchResult[]` (`title`, `snippet`, `url`, `domain`, `provider`) no matter which backend answered.
+
+- **Providers** (`src/lib/search/providers/`): `TAVILY`, `EXA`, `BING`, `GOOGLE_CSE` are **placeholders** — real request/response wiring against each provider's documented REST API, gated behind their own API key env var(s) (`TAVILY_API_KEY`, `EXA_API_KEY`, `BING_SEARCH_API_KEY`, `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_CX`), throwing a typed `SearchProviderNotConfiguredError` when the key is missing rather than silently failing. None have been exercised against a live key in this codebase — verify each against current provider docs before depending on it in production. `MOCK` is fully functional: no network call, no API key, deterministic query-aware canned results, meant for local development and tests.
+- **Selection**: `search()` uses the `provider` option if given, otherwise the `SEARCH_PROVIDER` env var, otherwise falls back to `MOCK` — so the app never breaks in an environment with no search API keys configured. An empty/whitespace query short-circuits to `[]` without calling any provider.
+- **`maxResults`** is honored by every provider and capped at `MAX_MAX_RESULTS` (`src/lib/search/constants.ts`); Google CSE additionally caps at its own hard limit of 10 per request.
+- Not wired into any feature yet — this is the abstraction layer only, ready for a caller (e.g. a future lead/market-signal discovery feature) to import from `@/lib/search`.
+
 ## Dashboard layout & UI components
 
 - **Shell** (`src/app/dashboard/layout.tsx`): sidebar + topbar, wrapped in a `MobileNavProvider` (`src/components/dashboard/mobile-nav-context.tsx`) so the sidebar can act as a slide-in drawer on mobile (`sm:` breakpoint and below) — a hamburger button in the topbar toggles it, a backdrop and nav-link clicks close it.
