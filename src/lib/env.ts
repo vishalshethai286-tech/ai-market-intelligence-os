@@ -25,8 +25,10 @@ export class MissingEnvError extends Error {}
  * Validates every required environment variable up front, failing fast with
  * one aggregated, human-readable error instead of letting each missing
  * variable surface later as a confusing runtime crash deep inside a request
- * (e.g. Prisma throwing because DATABASE_URL was never set). Called once
- * from `src/instrumentation.ts` when the server starts.
+ * (e.g. Prisma throwing because DATABASE_URL was never set). Called from
+ * `src/instrumentation.ts` on server start (reliable under `next start`,
+ * best-effort on Vercel) and from `src/lib/prisma.ts` on import (the gate
+ * Vercel actually enforces per-request — see the comment there).
  */
 export function validateEnv(): void {
   const result = RequiredEnvSchema.safeParse(process.env);
