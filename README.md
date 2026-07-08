@@ -27,6 +27,7 @@ Multi-tenant schema defined in [`prisma/schema.prisma`](prisma/schema.prisma):
 - **ProductService** — AI-discovered product/service catalog entries built from a `WebsiteAnalysis` (see [Product/Service Discovery](#productservice-discovery-ai-extraction)).
 - **BusinessBrain**, **BrainFact**, **BrainSource**, **BrainEntity**, **BrainRelationship**, **BrainUpdateRun**, **BrainFeedback** — a per-workspace knowledge base, built from the company profile/product catalog after onboarding (see [AI Business Brain](#ai-business-brain)).
 - **SearchQuery** — AI-generated candidate search queries grounded in a workspace's Business Brain (see [AI Search Query Generator](#ai-search-query-generator)).
+- **TargetCompany** — discovered lead candidates for a workspace to pursue (see [Target Companies](#target-companies)).
 
 Soft delete (`deletedAt`) is used on entities users can remove (User, Workspace, WorkspaceMember, Subscription). `Plan` and `Role` are reference/config data — retire with `isActive`/`isSystem` flags instead of deleting, since Subscriptions and memberships reference them. The three log tables (`UsageLog`, `ApiCostLog`, `AuditLog`) are append-only: no `updatedAt` or `deletedAt`, since rows are written once and never mutated.
 
@@ -181,6 +182,25 @@ A cooldown (`canStartNewAnalysis()`, the same one the website analyzer itself us
 - Unlike `identifyCompetitors` (best-effort enrichment that fails open), a generation failure **throws** — this is the feature's main deliverable, not a secondary enrichment, so a refusal/truncation/malformed response surfaces as a typed `QueryGenerationError` rather than silently returning nothing. Requires an already-built Business Brain (`BrainNotReadyError` if missing/still `INITIALIZING`) and at least a company name, product, or target industry to ground queries in (`InsufficientBrainContextError` otherwise).
 - **SearchQuery** rows are immutable once created (`workspaceId`+`query` is unique, so `createMany({ skipDuplicates: true })` silently dedupes exact repeats across regenerations rather than erroring or double-storing) and record `category`, `query`, and an optional `basedOn` note (which fact(s) grounded it, e.g. `"Industry: Manufacturing"`).
 - Not wired into any UI yet — call `generateAndStoreSearchQueries()`/`listSearchQueries()` directly from `@/lib/search-queries/service` until a page/action is built.
+
+## Target Companies
+
+**TargetCompany** (`prisma/schema.prisma`) — a workspace's discovered lead candidates. Mirrors `CompanyProfile`/`ProductService`'s review-gated lifecycle (`TargetCompanyStatus`: `PENDING_REVIEW` / `APPROVED` / `REJECTED`) rather than `BrainFact`'s verification-status lifecycle, since a target company is a proposed record to accept or reject wholesale, not an existing fact to confirm/correct.
+
+- **Descriptive fields** (`companyName`, `website`, `country`, `cityState`, `industry`, `companyDescription`, `buyerType`, `matchedProduct`) are free text, matching how the rest of this schema stores AI-extracted descriptive values (`BrainFact.factValue`, `ProductService.buyerTypes`) rather than foreign keys — not every target will map cleanly onto an existing internal product or brain fact.
+- **Provenance**: `sourceUrl` (where it was found) and `relevanceExplanation` (the AI's stated reasoning for why this company is a relevant target).
+- **Scoring**: `confidenceScore` (0-1, extraction confidence) and `priorityScore` (a separate computed ranking score for sorting/prioritizing targets) are distinct, same split as `BrainFact.confidenceScore` vs. `freshnessScore` — one is about extraction accuracy, the other about fit/ranking. `priorityGrade` (`A`/`B`/`C`/`D`) is a bucketed grade derived from `priorityScore`, nullable until a scoring pass assigns one — not populated by the extraction pipeline below, which only sets `confidenceScore`.
+- **`duplicateStatus`** (`UNIQUE` / `DUPLICATE` / `POSSIBLE_DUPLICATE`) is a plain enum column, not a self-referential link to whichever record it duplicates — that level of dedup-linking isn't built yet.
+- `lastVerifiedAt` mirrors `BrainFact.lastVerifiedAt` — when a human last confirmed this target is still accurate/relevant.
+
+### AI extraction from search results
+
+`src/lib/target-companies/` — turns raw `SearchResult`s (from the [Search Service](#search-service)) into `TargetCompany` rows, mirroring the `product-discovery`/`search-queries` module layout (`constants.ts`/`schema.ts`/`prompt.ts`/`extract.ts`/`service.ts`).
+
+- **`extractTargetCompanies(results, context, productChoices)`** (`extract.ts`) — one Claude call assesses a whole batch of search results at once against our own company profile (from Business Brain facts), returning exactly one assessment per result, in order, so each can be zipped back onto its source URL. For each result the model decides `isRelevantTarget` (excluding directories, news, marketplaces, social profiles, our own site, and known competitors' sites — a competitor isn't a lead), extracts `companyName`/`website`/`industry`/`country` only where actually inferable (empty string rather than a guess), explains its relevance judgment, and picks `matchedProduct` — constrained to an enum of our actual product/service names (plus empty), so it can't invent a product we don't offer. Throws `TargetExtractionError` on refusal/truncation/malformed output, same "main deliverable, don't fail open" posture as `generateSearchQueries`.
+- **`discoverAndExtractTargetCompanies(workspaceId, options)`** (`service.ts`) is the end-to-end pipeline: loads every stored `SearchQuery` for the workspace, runs each through `search()`, feeds the results through `extractTargetCompanies`, and **saves only the companies judged relevant** as `PENDING_REVIEW` `TargetCompany` rows. A company matching an existing row (by website domain, or company name if there's no website) is still saved but flagged `DUPLICATE` rather than dropped, so a human reviewing the queue sees repeat discoveries instead of losing a second source silently. A single bad query or failed extraction batch is skipped, not fatal to the whole run — requires an already-built Business Brain (`BrainNotReadyError`) and at least one stored `SearchQuery` (`NoSearchQueriesError`).
+- `listTargetCompanies(workspaceId)` — plain read helper, same convention as every other module's list function.
+- Not wired into any UI yet.
 
 ## Dashboard layout & UI components
 

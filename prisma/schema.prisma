@@ -107,6 +107,7 @@ model Workspace {
   brainUpdateRuns    BrainUpdateRun[]
   brainFeedback      BrainFeedback[]
   searchQueries      SearchQuery[]
+  targetCompanies    TargetCompany[]
   usageLogs          UsageLog[]
   apiCostLogs        ApiCostLog[]
   auditLogs          AuditLog[]
@@ -927,4 +928,77 @@ model SearchQuery {
   @@index([workspaceId, category])
   @@index([brainId])
   @@map("search_queries")
+}
+
+// ---------------------------------------------------------------------------
+// Target companies (lead candidates)
+// ---------------------------------------------------------------------------
+
+/// Mirrors CompanyProfile/ProductService's review-gated lifecycle: AI
+/// discovers/proposes a target, a human approves or rejects it.
+enum TargetCompanyStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum TargetCompanyDuplicateStatus {
+  UNIQUE
+  DUPLICATE
+  POSSIBLE_DUPLICATE
+}
+
+enum TargetCompanyPriorityGrade {
+  A
+  B
+  C
+  D
+}
+
+/// An AI-discovered target company (a lead candidate) for a workspace to
+/// pursue. Free-text `country`/`industry`/`buyerType`/`matchedProduct`
+/// (rather than relations) match how the rest of this schema stores
+/// AI-extracted descriptive values (e.g. BrainFact.factValue,
+/// ProductService.buyerTypes) — not every target will map cleanly onto an
+/// existing internal Product/Service or Brain fact.
+model TargetCompany {
+  id          String @id @default(cuid())
+  workspaceId String @map("workspace_id")
+
+  companyName        String  @map("company_name")
+  website            String?
+  country            String?
+  cityState          String? @map("city_state")
+  industry           String?
+  companyDescription String? @map("company_description")
+  buyerType          String? @map("buyer_type")
+  matchedProduct     String? @map("matched_product")
+
+  sourceUrl            String? @map("source_url")
+  /// The AI's explanation of why this company is a relevant target.
+  relevanceExplanation String? @map("relevance_explanation")
+
+  /// 0-1, the model's self-reported confidence this is a real, relevant company.
+  confidenceScore Float                       @default(0) @map("confidence_score")
+  /// Computed ranking score used to sort/prioritize targets — distinct from
+  /// confidenceScore (accuracy of the extraction itself), this is about how
+  /// good a fit the target is.
+  priorityScore   Float                       @default(0) @map("priority_score")
+  /// Bucketed grade derived from priorityScore. Null until a scoring pass assigns one.
+  priorityGrade   TargetCompanyPriorityGrade? @map("priority_grade")
+
+  status          TargetCompanyStatus          @default(PENDING_REVIEW)
+  duplicateStatus TargetCompanyDuplicateStatus @default(UNIQUE) @map("duplicate_status")
+
+  lastVerifiedAt DateTime? @map("last_verified_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, priorityGrade])
+  @@index([workspaceId, createdAt])
+  @@map("target_companies")
 }
