@@ -189,6 +189,50 @@ npm run check:schema
 
 which fails if a non-exempt model in `prisma/schema.prisma` is missing `workspaceId` (see `scripts/check-workspace-scoping.mjs` for the exempt list).
 
+## Environment Setup
+
+All configuration lives in environment variables, documented with placeholders and comments in [`.env.example`](.env.example) — the canonical template for every variable this app knows about. `.env.example` is tracked in git; every real `.env*` file is gitignored (see `.gitignore`) so secrets never get committed.
+
+1. Copy the template:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Fill in the **required** variables — the app refuses to start without them:
+
+   | Variable | Used for |
+   | --- | --- |
+   | `DATABASE_URL` | PostgreSQL connection string (Prisma) |
+   | `AUTH_SECRET` | Auth.js session/JWT signing secret — generate with `openssl rand -base64 32` |
+   | `NEXT_PUBLIC_APP_URL` | Base URL of the app, used for links/redirects |
+
+3. Fill in whichever **optional** variables the features you're working on need. Everything else in `.env.example` gates one specific feature and is safe to leave as a placeholder — the feature degrades gracefully (or isn't wired into any code path yet) until a real value is set:
+
+   | Category | Variables | Feature it gates |
+   | --- | --- | --- |
+   | AI providers | `ANTHROPIC_API_KEY` | Website-analysis extraction, product discovery, [AI Business Brain](#ai-business-brain) synthesis, competitor identification — get a key at [platform.claude.com](https://platform.claude.com) |
+   | Search providers | `SEARCH_PROVIDER`, `TAVILY_API_KEY`, `EXA_API_KEY`, `BING_SEARCH_API_KEY`, `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_CX` | [Search Service](#search-service) — defaults to the no-key `MOCK` provider if unset |
+   | Stripe | `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET` | Billing — reserved for a future feature, not wired into any code path yet |
+   | Email | `EMAIL_PROVIDER`, `RESEND_API_KEY`, `EMAIL_FROM` | Transactional email (password reset, invitations) — reserved, not wired yet |
+   | Storage | `BLOB_READ_WRITE_TOKEN` | File uploads — reserved, not wired yet |
+   | Queue/Cron | `CRON_SECRET` | Scheduled/background jobs — reserved, not wired yet |
+   | Logging | `LOG_LEVEL` | Structured logging — reserved, no logging library wired in yet |
+   | Feature flags | `FEATURE_FLAGS_PROVIDER`, `GROWTHBOOK_CLIENT_KEY` | Feature-flag rollout — reserved, not wired yet |
+
+### Startup validation
+
+`src/instrumentation.ts` calls `validateEnv()` (`src/lib/env.ts`) once when the server starts — both `next dev` and `next start`/production — before it accepts any requests. If a required variable is missing or invalid, the server refuses to start and prints exactly which one(s), instead of that surfacing later as a confusing crash deep inside the first request that needed it:
+
+```
+Error: An error occurred while loading instrumentation hook: Missing or invalid required environment variable(s):
+  - AUTH_SECRET: AUTH_SECRET is required — see .env.example.
+
+Copy .env.example to .env and fill in real values, then restart the server.
+```
+
+Only the three **required** variables above are checked at startup — optional/feature-gated variables aren't, since the app is designed to run without them.
+
 ## Project structure
 
 ```
@@ -273,23 +317,9 @@ scripts/
    npm install
    ```
 
-2. **Set up PostgreSQL**
+2. **Set up PostgreSQL and configure environment variables**
 
-   Use a local Postgres instance or a hosted one. Then copy the env template:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   Edit `.env` and set `DATABASE_URL` to your connection string, and generate an `AUTH_SECRET`:
-
-   ```
-   DATABASE_URL="postgresql://user:password@localhost:5432/ai_market_intelligence_os?schema=public"
-   AUTH_SECRET="$(openssl rand -base64 32)"
-   ANTHROPIC_API_KEY="sk-ant-..."
-   ```
-
-   `ANTHROPIC_API_KEY` powers the [Company Profile](#company-profile-ai-extraction) AI extraction feature — get one at [platform.claude.com](https://platform.claude.com). Everything else works without it; profile generation will fail (caught and surfaced as an error on the review screen) until it's set.
+   Use a local Postgres instance or a hosted one, then set `DATABASE_URL` (and everything else you need) as described in [Environment Setup](#environment-setup). At minimum you need `DATABASE_URL`, `AUTH_SECRET`, and `NEXT_PUBLIC_APP_URL` — the app won't start without them.
 
 3. **Apply migrations and generate the Prisma client**
 

@@ -30,8 +30,19 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files — every real environment file is ignored (may contain secrets).
+# .env.example is the checked-in canonical template: never add real
+# credentials to it, only placeholders.
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.test
+.env.test.local
+.env.*.local
+!.env.example
 
 # vercel
 .vercel
