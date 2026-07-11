@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { dashboardNav, siteConfig } from "@/config/site";
 import { WorkspaceSwitcher } from "@/components/dashboard/workspace-switcher";
 import { useMobileNav } from "@/components/dashboard/mobile-nav-context";
@@ -14,6 +15,7 @@ export function Sidebar({
   activeWorkspaceId?: string;
 }) {
   const { open, setOpen } = useMobileNav();
+  const pathname = usePathname();
 
   return (
     <>
@@ -47,17 +49,27 @@ export function Sidebar({
 
         <WorkspaceSwitcher workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} />
 
-        <nav className="flex flex-col gap-1 px-3">
-          {dashboardNav.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setOpen(false)}
-              className="rounded-md px-3 py-2 text-sm text-black/70 transition-colors hover:bg-black/[.04] hover:text-current dark:text-white/70 dark:hover:bg-white/[.06]"
-            >
-              {item.label}
-            </Link>
-          ))}
+        <nav className="flex flex-col gap-1 overflow-y-auto px-3 pb-4">
+          {dashboardNav.map((item) => {
+            const isActive =
+              item.href === "/dashboard" ? pathname === item.href : pathname?.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setOpen(false)}
+                aria-current={isActive ? "page" : undefined}
+                className={cn(
+                  "rounded-md px-3 py-2 text-sm transition-colors",
+                  isActive
+                    ? "bg-black/[.06] font-medium text-current dark:bg-white/[.1]"
+                    : "text-black/70 hover:bg-black/[.04] hover:text-current dark:text-white/70 dark:hover:bg-white/[.06]",
+                )}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
       </aside>
     </>

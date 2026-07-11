@@ -11,11 +11,18 @@ export const siteConfig = {
 } as const;
 
 export const dashboardNav = [
-  { label: "Overview", href: "/dashboard" },
-  { label: "Market Signals", href: "/dashboard/signals" },
-  { label: "Company Profile", href: "/dashboard/company-profile" },
-  { label: "Products & Services", href: "/dashboard/products" },
+  { label: "Dashboard", href: "/dashboard" },
+  { label: "Onboarding", href: "/onboarding" },
   { label: "Business Brain", href: "/dashboard/business-brain" },
+  { label: "Discovery Brain", href: "/dashboard/discovery-brain" },
+  { label: "Customers", href: "/dashboard/customers" },
+  { label: "Projects", href: "/dashboard/projects" },
+  { label: "Tender Buyers", href: "/dashboard/tender-buyers" },
+  { label: "Live Tenders", href: "/dashboard/live-tenders" },
+  { label: "Vendor Registrations", href: "/dashboard/vendor-registrations" },
+  { label: "Duplicates", href: "/dashboard/duplicates" },
+  { label: "Coverage", href: "/dashboard/coverage" },
   { label: "Reports", href: "/dashboard/reports" },
   { label: "Settings", href: "/dashboard/settings" },
+  { label: "Billing", href: "/dashboard/billing" },
 ] as const;

@@ -11,7 +11,7 @@ export const WorkspaceNameSchema = z.object({
 
 export const InviteMemberSchema = z.object({
   email: z.email({ error: "Please enter a valid email." }).trim().toLowerCase(),
-  role: z.enum([ROLES.ADMIN, ROLES.SALES_USER, ROLES.VIEWER], {
+  role: z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.USER, ROLES.VIEWER], {
     error: "Please choose a role.",
   }),
 });

@@ -39,6 +39,7 @@ enum PlanKey {
   STARTER
   PROFESSIONAL
   BUSINESS
+  GROWTH
   ENTERPRISE
 }
 
@@ -948,11 +949,13 @@ enum TargetCompanyDuplicateStatus {
   POSSIBLE_DUPLICATE
 }
 
+/// Bucketed grade the lead-scoring engine (src/lib/lead-scoring) assigns
+/// from priorityScore: A+ 85-100, A 70-84, B 50-69, C below 50.
 enum TargetCompanyPriorityGrade {
+  A_PLUS @map("A+")
   A
   B
   C
-  D
 }
 
 /// An AI-discovered target company (a lead candidate) for a workspace to

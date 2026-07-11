@@ -17,7 +17,7 @@ Multi-tenant schema defined in [`prisma/schema.prisma`](prisma/schema.prisma):
 - **Workspace** — a tenant. All tenant-scoped data hangs off this.
 - **WorkspaceMember** — join table between User and Workspace, carrying a Role and membership status.
 - **Role** — catalog of roles a member can hold (permissions as JSON, not an enum, so they can evolve without a migration).
-- **Plan** — sellable plan catalog (Free Trial, Starter, Professional, Business, Enterprise).
+- **Plan** — sellable plan catalog (Free Trial, Starter, Professional, Business, Growth, Enterprise).
 - **Subscription** — a Workspace's current subscription to a Plan (1:1).
 - **UsageLog** — product usage events for metering against a Plan's limits.
 - **ApiCostLog** — per-call cost/token tracking for external AI/API providers.
@@ -51,8 +51,8 @@ Email/password auth via [Auth.js (NextAuth v5)](https://authjs.dev), configured 
 - **Create workspace**: `/dashboard/workspaces/new` — any signed-in user can create an additional workspace and becomes its owner.
 - **Switch workspace**: the sidebar's `WorkspaceSwitcher` calls the `switchWorkspace` server action directly (not a form submit), which sets the `active_workspace` cookie after verifying the user is actually a member, then revalidates the dashboard.
 - **Workspace settings** (`/dashboard/settings`): rename the workspace, view members, and an invite-member **placeholder** (validates email/role, shows a confirmation message, but doesn't send an email or persist an invite yet) — both gated by role.
-- **Roles**: `OWNER`, `ADMIN`, `SALES_USER`, `VIEWER` (seeded in `prisma/seed.ts` — `WorkspaceMember.roleId` requires one of these to exist, so run the seed before testing signup).
-- **Access control** (`src/lib/access-control.ts`): pure role-check helpers — `canManageWorkspace`, `canInviteMembers`, `canManageBilling`, `canRemoveMember`, `isOwner` — plus a `requireRole()` guard that throws `AccessDeniedError` for use in actions/route handlers. Only `OWNER`/`ADMIN` can rename the workspace or invite members; only `OWNER` can manage billing or remove another `OWNER`.
+- **Roles**: `OWNER`, `ADMIN`, `MANAGER`, `USER`, `VIEWER`, `PLATFORM_ADMIN` (seeded in `prisma/seed.ts` — `WorkspaceMember.roleId` requires one of these to exist, so run the seed before testing signup). `PLATFORM_ADMIN` is an internal platform-team override, not a role a normal member is invited with (excluded from `InviteMemberSchema`) — every `can*` check in `access-control.ts` treats it as always-allowed.
+- **Access control** (`src/lib/access-control.ts`): pure role-check helpers — `canManageWorkspace`, `canInviteMembers`, `canManageBilling`, `canRemoveMember`, `isOwner`, `isPlatformAdmin` — plus a `requireRole()` guard that throws `AccessDeniedError` for use in actions/route handlers. Only `OWNER`/`ADMIN` can rename the workspace or invite members; only `OWNER` can manage billing or remove another `OWNER`; `OWNER`/`ADMIN`/`MANAGER`/`USER` can edit content (company profile, product catalog, Business Brain facts) — `VIEWER` is read-only everywhere. `PLATFORM_ADMIN` bypasses all of the above.
 
 ## Onboarding
 
@@ -92,7 +92,7 @@ Website-first onboarding wizard, one `WorkspaceOnboarding` row per Workspace (`p
 - **Extracted fields**: company name, business description, industry, business model, countries served, headquarters, operation type (`MANUFACTURER` / `TRADER` / `SERVICE_PROVIDER` / `OTHER` / `UNKNOWN`), certifications, key products/services, and a 0-1 confidence score. `sourceUrls` is set programmatically to the analyzed homepage URL (the model doesn't get to invent sources).
 - **`extractCompanyProfile(analysis)`** (`extract.ts`) builds the prompt from the analysis's title/meta description/headings/visible text/classified links (`prompt.ts`), calls Claude with adaptive thinking + `effort: "medium"`, and validates the response shape defensively even though structured outputs already guarantees it. Throws `ExtractionError` on a safety refusal, truncated (`max_tokens`) response, or malformed JSON.
 - **`generateCompanyProfile(workspaceId)`** (`service.ts`) is the DB-integrated entry point: finds the latest `COMPLETED` analysis (throws `NoAnalysisError` if there isn't one), runs extraction, and **upserts** — one `CompanyProfile` row per workspace, not history. Regenerating always resets `status` to `PENDING_REVIEW`, even if the previous draft was approved. The model's raw output for that run is kept in `aiRawExtraction` as an audit trail, untouched by later user edits.
-- **Review screen** (`src/components/company-profile/company-profile-form.tsx`, rendered at both `/dashboard/company-profile` and `/onboarding/review-profile`): every field is editable (array fields as comma-separated text inputs); **Save changes** persists edits without touching approval status; **Approve profile** sets `status: APPROVED` + `approvedAt`/`approvedByUserId`; **Regenerate** re-runs extraction from scratch. Editing/approving is gated by `canEditCompanyProfile()` (`OWNER`/`ADMIN`/`SALES_USER` — `VIEWER` is read-only).
+- **Review screen** (`src/components/company-profile/company-profile-form.tsx`, rendered at both `/dashboard/company-profile` and `/onboarding/review-profile`): every field is editable (array fields as comma-separated text inputs); **Save changes** persists edits without touching approval status; **Approve profile** sets `status: APPROVED` + `approvedAt`/`approvedByUserId`; **Regenerate** re-runs extraction from scratch. Editing/approving is gated by `canEditCompanyProfile()` (`OWNER`/`ADMIN`/`MANAGER`/`USER` — `VIEWER` is read-only).
 - **Wiring**: `startAnalysis()` (onboarding) calls `generateCompanyProfile()` best-effort right after the website analysis, then advances onboarding to the review-profile step instead of finishing (see [Onboarding](#onboarding)). The dashboard overview only shows a name/industry/confidence summary once the profile is `APPROVED` — an unapproved draft shows a "finish review" prompt instead.
 - Requires `ANTHROPIC_API_KEY` in `.env` (and in Vercel's env vars for production) — see [Local setup](#local-setup).
 
@@ -189,7 +189,7 @@ A cooldown (`canStartNewAnalysis()`, the same one the website analyzer itself us
 
 - **Descriptive fields** (`companyName`, `website`, `country`, `cityState`, `industry`, `companyDescription`, `buyerType`, `matchedProduct`) are free text, matching how the rest of this schema stores AI-extracted descriptive values (`BrainFact.factValue`, `ProductService.buyerTypes`) rather than foreign keys — not every target will map cleanly onto an existing internal product or brain fact.
 - **Provenance**: `sourceUrl` (where it was found) and `relevanceExplanation` (the AI's stated reasoning for why this company is a relevant target).
-- **Scoring**: `confidenceScore` (0-1, extraction confidence) and `priorityScore` (a separate computed ranking score for sorting/prioritizing targets) are distinct, same split as `BrainFact.confidenceScore` vs. `freshnessScore` — one is about extraction accuracy, the other about fit/ranking. `priorityGrade` (`A`/`B`/`C`/`D`) is a bucketed grade derived from `priorityScore`, nullable until a scoring pass assigns one — not populated by the extraction pipeline below, which only sets `confidenceScore`.
+- **Scoring**: `confidenceScore` (0-1, extraction confidence) and `priorityScore` (a separate computed 0-100 ranking score for sorting/prioritizing targets) are distinct, same split as `BrainFact.confidenceScore` vs. `freshnessScore` — one is about extraction accuracy, the other about fit/ranking. `priorityGrade` (`A+` / `A` / `B` / `C`; the enum member is `A_PLUS`, mapped to the DB value `"A+"` since Prisma enum identifiers can't contain `+`) is a bucketed grade derived from `priorityScore` by the [lead-scoring engine](#lead-scoring), nullable until a scoring pass assigns one — not populated by the extraction pipeline below, which only sets `confidenceScore`.
 - **`duplicateStatus`** (`UNIQUE` / `DUPLICATE` / `POSSIBLE_DUPLICATE`) is a plain enum column, not a self-referential link to whichever record it duplicates — that level of dedup-linking isn't built yet.
 - `lastVerifiedAt` mirrors `BrainFact.lastVerifiedAt` — when a human last confirmed this target is still accurate/relevant.
 
@@ -202,13 +202,29 @@ A cooldown (`canStartNewAnalysis()`, the same one the website analyzer itself us
 - `listTargetCompanies(workspaceId)` — plain read helper, same convention as every other module's list function.
 - Not wired into any UI yet.
 
+## Lead Scoring
+
+`src/lib/lead-scoring/` — computes each `TargetCompany`'s `priorityScore` (0-100) and `priorityGrade`, split into a pure compute layer (`scoring.ts`, no DB/network access, directly unit-testable) and a DB-integrated layer (`service.ts`) that assembles context and persists results.
+
+- **8 weighted factors** (`SCORING_WEIGHTS`, summing to 1): product match (20%), industry match (15%), buyer type match (10%), country match (10%), source quality (10%), contact availability (10%), similarity to existing good leads (15%), Business Brain feedback (10%).
+  - **Match factors** (product/industry/buyer type/country) compare the target's own field against the workspace's current Business Brain facts: **100** for an exact case-insensitive match, **40** if the target has a value that just doesn't match anything we currently track (still real, specific information — not nothing), **0** if the field is empty.
+  - **Source quality** reuses the extraction's own `confidenceScore` (0-1) scaled to 0-100 — a proxy for how clear the source was, since nothing else in this schema captures "quality" separately.
+  - **Contact availability** is binary: 100 if `website` is set, 0 if not — the only contact channel this schema currently captures.
+  - **Similarity to existing good leads** compares a target against every *other* `TargetCompany` in the workspace already marked `APPROVED` (25 points each for matching industry/buyerType/matchedProduct/country, capped at 100), taking the best match across all references and always excluding the target from its own reference pool. 0 if there are no approved leads yet — nothing to be similar to, not evidence of a bad fit.
+  - **Business Brain feedback** looks up `BrainFeedback` rows with `feedbackType` `GOOD_LEAD`/`BAD_LEAD` tied to this target by name (`subjectLabel` — the field added specifically for lead feedback before `TargetCompany` existed). No feedback at all scores a **neutral 50** (genuinely unknown, unlike the 0 given to an objectively-missing match field above); each net positive/negative feedback event shifts the score by 25, clamped to 0-100.
+- **Grade thresholds** (`scoreToGrade`): `A+` 85-100, `A` 70-84, `B` 50-69, `C` below 50.
+- **`scoreTargetCompany(workspaceId, targetCompanyId)`** scores and persists one target; **`scoreAllTargetCompanies(workspaceId)`** scores every target in a workspace, loading Brain facts/approved-lead references/feedback tallies once and reusing them across the whole batch rather than per row. Requires an existing Business Brain (`BrainNotReadyError`).
+- Not wired into any UI or automatically triggered after discovery yet — call these directly from `@/lib/lead-scoring/service`.
+
 ## Dashboard layout & UI components
 
-- **Shell** (`src/app/dashboard/layout.tsx`): sidebar + topbar, wrapped in a `MobileNavProvider` (`src/components/dashboard/mobile-nav-context.tsx`) so the sidebar can act as a slide-in drawer on mobile (`sm:` breakpoint and below) — a hamburger button in the topbar toggles it, a backdrop and nav-link clicks close it.
+- **Shell** (`src/app/dashboard/layout.tsx`): sidebar + topbar, wrapped in a `MobileNavProvider` (`src/components/dashboard/mobile-nav-context.tsx`) so the sidebar can act as a slide-in drawer on mobile (`sm:` breakpoint and below) — a hamburger button in the topbar toggles it, a backdrop and nav-link clicks close it. Route-level `loading.tsx`/`error.tsx` (`src/app/dashboard/`) render `LoadingState`/`ErrorState` for the whole segment.
+- **Sidebar nav** (`dashboardNav` in `src/config/site.ts`): Dashboard, Onboarding, Business Brain, Discovery Brain, Customers, Projects, Tender Buyers, Live Tenders, Vendor Registrations, Duplicates, Coverage, Reports, Settings, Billing — the current link highlights via `usePathname()`. Most of these (everything except Dashboard/Business Brain/Settings) are placeholder pages (`ComingSoonPage`, `src/components/dashboard/coming-soon.tsx`) since the discovery features behind them aren't built yet (see `PRODUCT_VISION.md`); **Billing** is a real read-only view of the `Plan`/`Subscription` tables (no Stripe checkout wired in — see below). Company Profile and Products & Services still exist as full pages, just linked from the dashboard home cards instead of the sidebar.
 - **Workspace switcher** and **user menu** (avatar → name/email/workspace/role, settings link, logout) live in `src/components/dashboard/`. The user menu closes on outside click or Escape.
 - **Dashboard home**: empty-state cards (Team, Market Signals, Reports, Getting Started) using the `Card` primitive — no business data yet, but `Team` shows a real member count since it's a free query.
-- **Reusable primitives** (`src/components/ui/`): `Button`, `Input`, `Textarea`, `Label`, `Select`, `Badge`, `Card`, `Table` (+ `FieldError` for form errors) — built on `class-variance-authority` for variants and a `cn()` helper (`clsx` + `tailwind-merge`) in `src/lib/cn.ts`. Every form and table in the app (login, signup, forgot-password, create/rename workspace, invite member, members table, company profile) uses these instead of ad-hoc styling.
+- **Reusable primitives** (`src/components/ui/`): `Button`, `Input`, `Textarea`, `Label`, `Select`, `Badge`, `Card`, `Table` (+ `FieldError` for form errors), plus `Dialog`/`DialogHeader`/`DialogTitle`/`DialogDescription`/`DialogFooter` (controlled modal, portal-rendered, closes on Escape/backdrop click — no Radix/shadcn dependency, see below), `LoadingState`/`Spinner`, `EmptyState`, `ErrorState`, `PageHeader`, and `StatCard` — built on `class-variance-authority` for variants and a `cn()` helper (`clsx` + `tailwind-merge`) in `src/lib/cn.ts`. Every form and table in the app (login, signup, forgot-password, create/rename workspace, invite member, members table, company profile) uses these instead of ad-hoc styling.
   - `Table`'s wrapper uses `overflow-x-auto` (not `overflow-hidden`) so extra columns scroll horizontally on narrow screens instead of being clipped.
+  - No component library (shadcn/ui, Radix, etc.) is installed — `src/components/ui/` is hand-rolled but follows shadcn-like conventions (`cva` variants, `cn()` merge, `forwardRef`). Install shadcn/ui explicitly before assuming its CLI/primitives are available.
 
 ### Convention: every model belongs to a workspace
 
@@ -242,12 +258,14 @@ All configuration lives in environment variables, documented with placeholders a
 
    | Category | Variables | Feature it gates |
    | --- | --- | --- |
-   | AI providers | `ANTHROPIC_API_KEY` | Website-analysis extraction, product discovery, [AI Business Brain](#ai-business-brain) synthesis, competitor identification — get a key at [platform.claude.com](https://platform.claude.com) |
-   | Search providers | `SEARCH_PROVIDER`, `TAVILY_API_KEY`, `EXA_API_KEY`, `BING_SEARCH_API_KEY`, `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_CX` | [Search Service](#search-service) — defaults to the no-key `MOCK` provider if unset |
+   | AI providers | `ANTHROPIC_API_KEY`, `ENABLE_MOCK_AI` | Website-analysis extraction, product discovery, [AI Business Brain](#ai-business-brain) synthesis, competitor identification — get a key at [platform.claude.com](https://platform.claude.com). `ENABLE_MOCK_AI` is reserved, not wired in yet |
+   | Search providers | `SEARCH_PROVIDER`, `TAVILY_API_KEY`, `EXA_API_KEY`, `BING_SEARCH_API_KEY`, `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_CX`, `ENABLE_MOCK_SEARCH` | [Search Service](#search-service) — defaults to the no-key `MOCK` provider if unset. `ENABLE_MOCK_SEARCH` is reserved, not wired in yet |
    | Stripe | `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET` | Billing — reserved for a future feature, not wired into any code path yet |
    | Email | `EMAIL_PROVIDER`, `RESEND_API_KEY`, `EMAIL_FROM` | Transactional email (password reset, invitations) — reserved, not wired yet |
    | Storage | `BLOB_READ_WRITE_TOKEN` | File uploads — reserved, not wired yet |
    | Queue/Cron | `CRON_SECRET` | Scheduled/background jobs — reserved, not wired yet |
+   | Global discovery | `DISCOVERY_BATCH_SIZE` | Future continuous global discovery job — reserved, no discovery job exists yet |
+   | Platform admin | `PLATFORM_ADMIN_EMAILS` | Future internal admin area — reserved, not wired yet |
    | Logging | `LOG_LEVEL` | Structured logging — reserved, no logging library wired in yet |
    | Feature flags | `FEATURE_FLAGS_PROVIDER`, `GROWTHBOOK_CLIENT_KEY` | Feature-flag rollout — reserved, not wired yet |
 
@@ -269,7 +287,7 @@ Only the three **required** variables above are checked at startup — optional/
 ```
 prisma/
   schema.prisma        Prisma schema — multi-tenant data model
-  seed.ts              Seeds system roles + the 5 plans
+  seed.ts              Seeds system roles + the 6 plans
   migrations/          Migration history (committed)
 prisma.config.ts        Prisma CLI config (migrations, seed command, DB connection for CLI)
 src/
@@ -292,6 +310,11 @@ src/
       company-profile/   /dashboard/company-profile — page.tsx only, form lives in components/
       products/          /dashboard/products — page.tsx only, cards live in components/
       business-brain/    /dashboard/business-brain — company summary, catalog, industries, buyer personas, keywords, competitors
+      billing/            /dashboard/billing — read-only Plan/Subscription view, no Stripe checkout
+      discovery-brain/, customers/, projects/, tender-buyers/, live-tenders/,
+      vendor-registrations/, duplicates/, coverage/, reports/   Sidebar sections
+                          not built yet — each is a one-line ComingSoonPage
+      loading.tsx, error.tsx   Route-segment loading/error states for the whole dashboard
     onboarding/
       layout.tsx         Onboarding shell (logo, logout, centered content)
       page.tsx           Redirects to the workspace's current step
@@ -300,12 +323,15 @@ src/
       review-products/   Step 7 — product/service review (edit, approve, reject, delete, finish)
   components/
     landing/             Landing page sections
-    dashboard/            Sidebar, topbar, workspace switcher, user menu, mobile nav context
+    dashboard/            Sidebar (active-route highlighting), topbar, workspace switcher, user
+                          menu, mobile nav context, ComingSoonPage (shared placeholder-page shell)
     onboarding/           Step progress indicator
     company-profile/      CompanyProfileForm/ApproveButton/RegenerateButton — shared by dashboard + onboarding
     product-discovery/    ProductServiceCard/RegenerateButton — shared by dashboard + onboarding
     business-brain/       FactRow — value, confidence, source URL, last verified date, verification buttons
-    ui/                   Reusable primitives: Button, Input, Textarea, Label, Select, Checkbox, Badge, Card, Table, FieldError
+    ui/                   Reusable primitives: Button, Input, Textarea, Label, Select, Checkbox, Badge,
+                          Card, Table, FieldError, Dialog, LoadingState/Spinner, EmptyState, ErrorState,
+                          PageHeader, StatCard
   config/
     site.ts              Site name, nav links, dashboard nav
     onboarding.ts         Target country / customer type options, step order
@@ -313,8 +339,10 @@ src/
     cn.ts                clsx + tailwind-merge helper
     prisma.ts            Prisma client singleton (uses driver adapter)
     slug.ts              Workspace slug generation/uniqueness
-    access-control.ts     Role constants + permission predicates + requireRole guard
+    access-control.ts     Role constants + permission predicates (PLATFORM_ADMIN bypass) + requireRole guard
+    access-control.test.ts  Vitest — role-helper unit tests
     workspace.ts          Active-workspace resolution, workspace creation
+    workspace.test.ts      Vitest — workspace creation, user isolation, protected-route primitives (integration, real DB)
     onboarding.ts          Onboarding step guard, get-or-create, completion check
     website-analysis.ts    DB-integrated analysis service (create/update WebsiteAnalysis, rate limit)
     website-analyzer/      SSRF guard, robots.txt check, safe fetch, HTML parse, page classifier
@@ -338,6 +366,8 @@ src/
     prisma/               Generated Prisma client (gitignored, not committed)
 scripts/
   check-workspace-scoping.mjs   Fails if a model is missing workspaceId
+vitest.config.ts          Vitest config — @ alias, node environment, server-only stub
+vitest.setup.ts            Loads .env via dotenv/config before tests run
 ```
 
 ## Local setup
@@ -367,7 +397,7 @@ scripts/
    npx prisma db seed
    ```
 
-   This upserts the system roles (`OWNER`, `ADMIN`, `SALES_USER`, `VIEWER`) and the 5 plans (Free Trial, Starter, Professional, Business, Enterprise) — safe to re-run. The `OWNER` role must exist before anyone can sign up.
+   This upserts the system roles (`OWNER`, `ADMIN`, `MANAGER`, `USER`, `VIEWER`, `PLATFORM_ADMIN`) and the 6 plans (Free Trial, Starter, Professional, Business, Growth, Enterprise) — safe to re-run. The `OWNER` role must exist before anyone can sign up.
 
 5. **Run the dev server**
 
@@ -386,10 +416,29 @@ scripts/
 | `npm run start`     | Run the production build         |
 | `npm run lint`      | Lint the codebase                |
 | `npm run check:schema` | Fail if a model is missing `workspaceId` |
+| `npm test`           | Run the Vitest suite once        |
+| `npm run test:watch` | Run Vitest in watch mode          |
 | `npx prisma generate` | Regenerate the Prisma client   |
 | `npx prisma migrate dev` | Create/apply a migration (dev) |
 | `npx prisma migrate deploy` | Apply existing migrations (CI/prod) |
-| `npx prisma db seed` | Seed the plan catalog          |
+| `npx prisma db seed` | Seed the role and plan catalogs |
+
+## Testing
+
+[Vitest](https://vitest.dev) (`vitest.config.ts`, `vitest.setup.ts`) covers pure logic and DB-integrated library code under `src/lib/**/*.test.ts` — not yet component/UI or end-to-end tests. Current coverage:
+
+- **`src/lib/access-control.test.ts`** — role-helper unit tests (no DB): every `can*`/`is*` check across all six roles, including the `PLATFORM_ADMIN` bypass.
+- **`src/lib/workspace.test.ts`** — integration tests against the real dev database (creates/cleans up its own `vitest-phase2-*` users and workspaces): `createWorkspaceWithOwner` (workspace + OWNER membership, unique slugs), user/workspace isolation (`listMemberships` and workspace-scoped queries never leak another user's workspace), and the protected-route primitives `getWorkspaceContext`/`requireActiveWorkspace` (mocks `@/auth`, `next/headers`, `next/navigation` — asserts the redirect-to-login/redirect-to-workspace-creation behavior every dashboard page depends on).
+
+Requires a real `DATABASE_URL` (loaded via `dotenv/config` in `vitest.setup.ts`, same `.env` as `npm run dev`) — the integration tests talk to Postgres directly, they don't mock Prisma.
+
+```bash
+npm test               # Vitest — access-control + workspace tests
+npm run lint          # ESLint
+npx tsc --noEmit       # Type-check
+npm run check:schema   # Every model has workspaceId
+npm run build          # Production build (also type-checks)
+```
 
 ## Notes
 

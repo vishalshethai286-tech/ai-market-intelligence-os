@@ -20,9 +20,10 @@ export function InviteMemberForm() {
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="invite-role">Role</Label>
-          <Select id="invite-role" name="role" defaultValue="SALES_USER">
+          <Select id="invite-role" name="role" defaultValue="USER">
             <option value="ADMIN">Admin</option>
-            <option value="SALES_USER">Sales User</option>
+            <option value="MANAGER">Manager</option>
+            <option value="USER">User</option>
             <option value="VIEWER">Viewer</option>
           </Select>
         </div>

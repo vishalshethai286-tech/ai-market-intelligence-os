@@ -49,7 +49,7 @@ export default async function CompanyProfilePage() {
                 <RegenerateButton label="Generate profile" className="mt-3" />
               ) : (
                 <p className="mt-3 text-black/50 dark:text-white/50">
-                  Ask an owner, admin, or sales user to generate one.
+                  Ask an owner, admin, manager, or user to generate one.
                 </p>
               )}
             </>

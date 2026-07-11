@@ -46,7 +46,7 @@ export default async function ProductsPage() {
                 <RegenerateButton label="Run discovery" className="mt-3" />
               ) : (
                 <p className="mt-3 text-black/50 dark:text-white/50">
-                  Ask an owner, admin, or sales user to run discovery.
+                  Ask an owner, admin, manager, or user to run discovery.
                 </p>
               )}
             </>

@@ -62,6 +62,27 @@ const plans = [
     sortOrder: 3,
   },
   {
+    key: "GROWTH" as const,
+    name: "Growth",
+    description: "Expanded discovery coverage and reporting for scaling sales teams.",
+    priceCents: 59_900,
+    trialDays: 0,
+    maxSeats: 250,
+    maxWorkspaces: 25,
+    usageLimits: { apiCallsPerMonth: 400_000, reportsPerMonth: 1_500 },
+    features: [
+      "core_dashboard",
+      "email_alerts",
+      "ai_insights",
+      "priority_support",
+      "sso",
+      "custom_roles",
+      "audit_log_export",
+      "advanced_discovery_coverage",
+    ],
+    sortOrder: 4,
+  },
+  {
     key: "ENTERPRISE" as const,
     name: "Enterprise",
     description: "Custom pricing, unlimited scale, and dedicated support. Contact sales.",
@@ -82,7 +103,7 @@ const plans = [
       "sla",
       "custom_integrations",
     ],
-    sortOrder: 4,
+    sortOrder: 5,
   },
 ];
 
@@ -100,16 +121,28 @@ const roles = [
     permissions: ["workspace:read", "workspace:update", "members:*"],
   },
   {
-    key: "SALES_USER",
-    name: "Sales User",
+    key: "MANAGER",
+    name: "Manager",
+    description: "Can edit company profile, product catalog, and Business Brain facts.",
+    permissions: ["workspace:read", "content:*"],
+  },
+  {
+    key: "USER",
+    name: "User",
     description: "Standard workspace member working with sales/market data.",
-    permissions: ["workspace:read"],
+    permissions: ["workspace:read", "content:*"],
   },
   {
     key: "VIEWER",
     name: "Viewer",
     description: "Read-only access to the workspace.",
     permissions: ["workspace:read"],
+  },
+  {
+    key: "PLATFORM_ADMIN",
+    name: "Platform Admin",
+    description: "Internal platform team override — full access across every workspace action.",
+    permissions: ["*"],
   },
 ];
 
@@ -132,6 +165,18 @@ async function main() {
   if (staleMemberRole && staleMemberRole._count.members === 0) {
     await prisma.role.delete({ where: { key: "MEMBER" } });
     console.log("Removed stale MEMBER role (superseded by SALES_USER)");
+  }
+
+  // SALES_USER superseded by USER — reassign any existing members, then drop it.
+  const staleSalesUserRole = await prisma.role.findUnique({ where: { key: "SALES_USER" } });
+  if (staleSalesUserRole) {
+    const userRole = await prisma.role.findUniqueOrThrow({ where: { key: "USER" } });
+    const { count } = await prisma.workspaceMember.updateMany({
+      where: { roleId: staleSalesUserRole.id },
+      data: { roleId: userRole.id },
+    });
+    await prisma.role.delete({ where: { key: "SALES_USER" } });
+    console.log(`Removed stale SALES_USER role (superseded by USER, reassigned ${count} member(s))`);
   }
 
   for (const plan of plans) {
