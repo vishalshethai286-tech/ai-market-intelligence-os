@@ -19,6 +19,7 @@ import {
 } from "@/lib/contacts/service";
 import type { AddContactActivityInput, RelatedRecordType } from "@/lib/contacts/service";
 import { refreshContactEnrichment, refreshWorkspaceContactEnrichment } from "@/lib/contacts/enrichment";
+import { UsageLimitExceededError } from "@/lib/billing/usage";
 import { ContactFormSchema, toList } from "@/lib/validations/contact";
 import type { ContactFormState } from "@/lib/validations/contact";
 import type { ContactStatus } from "@/models";
@@ -82,12 +83,17 @@ export async function createContactAction(_prevState: ContactFormState, formData
     return { errors: validatedFields.error.flatten().fieldErrors };
   }
 
-  const { contact, outcome } = await createContact(active.workspace.id, validatedFields.data);
-  revalidateContactPaths();
-  return {
-    message: outcome === "UPDATED_EXISTING" ? "A matching contact already existed — updated it instead of creating a duplicate." : "Contact created.",
-    contactId: contact.id,
-  };
+  try {
+    const { contact, outcome } = await createContact(active.workspace.id, validatedFields.data);
+    revalidateContactPaths();
+    return {
+      message: outcome === "UPDATED_EXISTING" ? "A matching contact already existed — updated it instead of creating a duplicate." : "Contact created.",
+      contactId: contact.id,
+    };
+  } catch (error) {
+    if (error instanceof UsageLimitExceededError) return { message: error.message };
+    throw error;
+  }
 }
 
 /** Updates an existing contact's editable fields from a submitted contact-form.tsx form — the contact id travels as a hidden field. */

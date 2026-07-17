@@ -6,6 +6,7 @@ import { requireActiveWorkspace } from "@/lib/workspace";
 import { canManageDiscovery } from "@/lib/access-control";
 import { processCustomerResults, type ProcessCustomerResultsOptions } from "@/lib/customers/processor";
 import { updateCustomerStatus, CustomerNotFoundError } from "@/lib/customers/service";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import { recordFeedback, BrainFeedbackTargetError } from "@/lib/business-brain/service";
 import { dbConnect } from "@/lib/mongodb";
 import { TargetCustomer as TargetCustomerModel } from "@/models";
@@ -32,10 +33,12 @@ export async function processCustomerResultsAction(
   }
 
   try {
+    enforceRateLimit(active.workspace.id, "process_extraction");
     const summary = await processCustomerResults(active.workspace.id, input);
     revalidateCustomerPaths();
     return { ok: true, ...summary };
-  } catch {
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) return { ok: false, error: error.message };
     return { ok: false, error: "Couldn't process customer results right now. Please try again." };
   }
 }

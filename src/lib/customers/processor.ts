@@ -17,6 +17,7 @@ import {
 } from "./duplicate";
 import { DEFAULT_PROCESSING_BATCH_SIZE, MAX_PROCESSING_BATCH_SIZE } from "./constants";
 import { checkCustomerForDuplicates } from "@/lib/dedup/customer-service";
+import { checkUsageLimit } from "@/lib/billing/usage";
 import type { CustomerExtractionContext } from "./prompt";
 import type { BrainFact, BrainFactType, RawSearchResult } from "@/models";
 
@@ -32,6 +33,8 @@ export type ProcessCustomerResultsSummary = {
   customersUpdated: number;
   skipped: number;
   failed: number;
+  /** True when the batch didn't run at all because the workspace's plan is already at its TargetCustomer limit — checked once per batch (not per record, to keep this cheap), so an update-only batch could in principle also be skipped even though updates don't consume the limit; documented as an MVP-level approximation. */
+  limitReached: boolean;
 };
 
 function factValues(facts: BrainFact[], type: BrainFactType): string[] {
@@ -108,8 +111,14 @@ export async function processCustomerResults(
     customersUpdated: 0,
     skipped: 0,
     failed: 0,
+    limitReached: false,
   };
   if (results.length === 0) return summary;
+
+  const usageCheck = await checkUsageLimit(workspaceId, "customer_created");
+  if (!usageCheck.allowed) {
+    return { ...summary, limitReached: true };
+  }
 
   const { extractionContext, approvedReferences, productIdByName } = await buildProcessingContext(workspaceId);
 

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { dbConnect } from "@/lib/mongodb";
-import { Workspace, User, Subscription, TargetCompany, UsageLog } from "@/models";
+import { Workspace, User, Subscription, TargetCompany, DiscoveryRun, DiscoveryErrorLog, Contact } from "@/models";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 
@@ -8,13 +8,18 @@ export const metadata: Metadata = { title: "Platform Admin — Overview" };
 
 export default async function PlatformAdminOverviewPage() {
   await dbConnect();
-  const [workspaceCount, userCount, activeSubscriptionCount, targetCompanyCount, discoveryRunCount] =
+  const since24h = new Date();
+  since24h.setDate(since24h.getDate() - 1);
+  const [workspaceCount, userCount, activeSubscriptionCount, targetCompanyCount, discoveryRunCount, contactCount, failedRuns24h, errors24h] =
     await Promise.all([
       Workspace.countDocuments({ deletedAt: null }),
       User.countDocuments({ deletedAt: null }),
       Subscription.countDocuments({ status: { $in: ["TRIALING", "ACTIVE"] } }),
       TargetCompany.countDocuments(),
-      UsageLog.countDocuments({ metric: "discovery_run" }),
+      DiscoveryRun.countDocuments(),
+      Contact.countDocuments(),
+      DiscoveryRun.countDocuments({ status: "FAILED", createdAt: { $gte: since24h } }),
+      DiscoveryErrorLog.countDocuments({ createdAt: { $gte: since24h } }),
     ]);
 
   return (
@@ -26,7 +31,10 @@ export default async function PlatformAdminOverviewPage() {
         <StatCard label="Users" value={userCount} />
         <StatCard label="Active/trialing subscriptions" value={activeSubscriptionCount} />
         <StatCard label="Target companies discovered" value={targetCompanyCount} />
+        <StatCard label="Contacts discovered" value={contactCount} />
         <StatCard label="Discovery runs" value={discoveryRunCount} />
+        <StatCard label="Failed runs, last 24h" value={failedRuns24h} />
+        <StatCard label="Search errors, last 24h" value={errors24h} />
       </div>
     </div>
   );

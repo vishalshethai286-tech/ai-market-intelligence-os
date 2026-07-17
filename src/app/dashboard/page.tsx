@@ -18,6 +18,7 @@ import { getContactDiscoveryStats } from "@/lib/contact-discovery/service";
 import { getWorkspaceContactCoverageSummary } from "@/lib/contacts/recommendations";
 import { getDuplicateDashboardStats } from "@/lib/dedup/service";
 import { getDiscoveryDashboardStats } from "@/lib/discovery-brain/runs";
+import { getUsageDashboardStats } from "@/lib/billing/usage";
 import { canInviteMembers } from "@/lib/access-control";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +59,7 @@ export default async function DashboardPage() {
     contactStats,
     contactDiscoveryStats,
     contactCoverage,
+    usageStats,
   ] = await Promise.all([
     WorkspaceMember.countDocuments({ workspaceId: active.workspace.id, deletedAt: null }),
     getLatestAnalysis(active.workspace.id),
@@ -73,6 +75,7 @@ export default async function DashboardPage() {
     getContactStats(active.workspace.id),
     getContactDiscoveryStats(active.workspace.id),
     getWorkspaceContactCoverageSummary(active.workspace.id),
+    getUsageDashboardStats(active.workspace.id),
   ]);
   const tenderStats = await getTenderDashboardStats(active.workspace.id, tenderBuyerCount);
 
@@ -541,6 +544,42 @@ export default async function DashboardPage() {
             </p>
             <Link href="/dashboard/reports" className="mt-1 inline-block text-sm text-black/50 hover:text-current dark:text-white/50">
               View reports &rarr;
+            </Link>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Billing</CardTitle>
+              {usageStats.isTrialing && <Badge variant="warning">Trial</Badge>}
+              {usageStats.isNearAnyLimit && <Badge variant="danger">Near limit</Badge>}
+            </div>
+            <CardDescription>{usageStats.planName}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-black/50 dark:text-white/50">
+              {usageStats.discoveryCreditsLimit === null
+                ? `${usageStats.discoveryCreditsUsed.toLocaleString()} discovery credits used · unlimited`
+                : `${usageStats.discoveryCreditsUsed.toLocaleString()} / ${usageStats.discoveryCreditsLimit.toLocaleString()} discovery credits`}
+            </p>
+            <p className="mt-1 text-sm text-black/50 dark:text-white/50">
+              {usageStats.contactsLimit === null
+                ? `${usageStats.contactsUsed.toLocaleString()} contacts · unlimited`
+                : `${usageStats.contactsUsed.toLocaleString()} / ${usageStats.contactsLimit.toLocaleString()} contacts`}
+            </p>
+            <p className="mt-1 text-sm text-black/50 dark:text-white/50">
+              {usageStats.exportsLimit === null
+                ? `${usageStats.exportsUsed.toLocaleString()} exports this period · unlimited`
+                : `${usageStats.exportsUsed.toLocaleString()} / ${usageStats.exportsLimit.toLocaleString()} exports this period`}
+            </p>
+            {usageStats.isNearAnyLimit && (
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                Approaching a plan limit — consider upgrading.
+              </p>
+            )}
+            <Link href="/dashboard/billing" className="mt-1 inline-block text-sm text-black/50 hover:text-current dark:text-white/50">
+              {usageStats.isNearAnyLimit ? "Upgrade plan" : "Manage billing"} &rarr;
             </Link>
           </CardContent>
         </Card>

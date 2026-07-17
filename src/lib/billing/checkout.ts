@@ -55,3 +55,44 @@ export async function createCheckoutSession(
   }
   return session.url;
 }
+
+export class NoStripeCustomerError extends Error {}
+
+/** Opens Stripe's hosted Billing Portal (update payment method, view invoices, cancel) for a workspace that already has a Stripe customer — i.e. has completed checkout at least once. */
+export async function createBillingPortalSession(workspaceId: string): Promise<string> {
+  await dbConnect();
+  const subscription = await Subscription.findOne({ workspaceId });
+  if (!subscription?.stripeCustomerId) {
+    throw new NoStripeCustomerError("This workspace doesn't have a Stripe billing account yet — start checkout first.");
+  }
+
+  const stripe = getStripeClient();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+
+  const session = await stripe.billingPortal.sessions.create({
+    customer: subscription.stripeCustomerId,
+    return_url: `${appUrl}/dashboard/billing`,
+  });
+
+  return session.url;
+}
+
+export class NoStripeSubscriptionError extends Error {}
+
+/**
+ * Cancels a real Stripe subscription at the end of the current billing
+ * period (not immediately, so the workspace keeps access it already paid
+ * for). The Subscription row's cancelAt/status are updated by the
+ * subsequent customer.subscription.updated webhook, not here — same
+ * "webhook is the source of truth" pattern as checkout.
+ */
+export async function cancelSubscriptionAtPeriodEnd(workspaceId: string): Promise<void> {
+  await dbConnect();
+  const subscription = await Subscription.findOne({ workspaceId });
+  if (!subscription?.stripeSubscriptionId) {
+    throw new NoStripeSubscriptionError("This workspace doesn't have an active Stripe subscription to cancel.");
+  }
+
+  const stripe = getStripeClient();
+  await stripe.subscriptions.update(subscription.stripeSubscriptionId, { cancel_at_period_end: true });
+}

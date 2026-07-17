@@ -7,6 +7,14 @@ const PLATFORM_ADMIN_NAV = [
   { label: "Overview", href: "/platform-admin" },
   { label: "Workspaces", href: "/platform-admin/workspaces" },
   { label: "Users", href: "/platform-admin/users" },
+  { label: "Subscriptions", href: "/platform-admin/subscriptions" },
+  { label: "Usage", href: "/platform-admin/usage" },
+  { label: "Discovery Runs", href: "/platform-admin/discovery-runs" },
+  { label: "Search Errors", href: "/platform-admin/errors" },
+  { label: "API Cost Logs", href: "/platform-admin/api-costs" },
+  { label: "Duplicate Stats", href: "/platform-admin/duplicates" },
+  { label: "Export Logs", href: "/platform-admin/exports" },
+  { label: "System Health", href: "/platform-admin/system-health" },
 ] as const;
 
 export default async function PlatformAdminLayout({ children }: { children: React.ReactNode }) {

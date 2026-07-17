@@ -29,4 +29,5 @@ export const dashboardNav = [
   { label: "Reports", href: "/dashboard/reports" },
   { label: "Settings", href: "/dashboard/settings" },
   { label: "Billing", href: "/dashboard/billing" },
+  { label: "Usage", href: "/dashboard/usage" },
 ] as const;

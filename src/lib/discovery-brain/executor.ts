@@ -12,6 +12,7 @@ import {
 } from "@/models";
 import { search, resolveProviderName, SearchProviderNotConfiguredError, SearchProviderRequestError } from "@/lib/search";
 import { refreshDimensionCoverage, computeCoverageSnapshot } from "./coverage";
+import { checkUsageLimit, incrementUsage } from "@/lib/billing/usage";
 import type { RunType, SearchType } from "@/models";
 
 export class DiscoveryBrainNotReadyError extends Error {}
@@ -25,6 +26,19 @@ function defaultBatchSize(): number {
 function requestTimeoutMs(): number {
   const parsed = Number(process.env.DISCOVERY_SEARCH_TIMEOUT_MS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+}
+
+/** Meters a completed/failed run's consumption after the fact — partial progress before a crash is still counted. Zero-quantity logs are skipped to avoid UsageLog noise. `contact_discovery_search` is logged for visibility only (never limit-checked, see billing/usage.ts). */
+async function logDiscoveryUsage(workspaceId: string, queriesExecuted: number, rawResultsFound: number, searchType?: SearchType): Promise<void> {
+  if (queriesExecuted > 0) {
+    await incrementUsage(workspaceId, "discovery_search_execution", queriesExecuted);
+    if (searchType === "CONTACT") {
+      await incrementUsage(workspaceId, "contact_discovery_search", queriesExecuted);
+    }
+  }
+  if (rawResultsFound > 0) {
+    await incrementUsage(workspaceId, "raw_search_result_stored", rawResultsFound);
+  }
 }
 
 /** Resolving the provider name can itself throw (e.g. misconfigured in production) — safe to call from an error-logging path, where a second throw would escape the per-item try/catch entirely. */
@@ -227,7 +241,28 @@ export async function executeDiscoveryRun(
     throw new DiscoveryBrainNotReadyError("Generate the discovery queue before running discovery.");
   }
 
-  const limit = Math.min(defaultBatchSize(), options.maxQueueItems ?? Infinity);
+  let limit = Math.min(defaultBatchSize(), options.maxQueueItems ?? Infinity);
+
+  // Discovery credits gate how many searches this batch is allowed to run,
+  // not whether it runs at all — a workspace with 3 credits left still gets
+  // to run 3 searches instead of being blocked outright. Unlimited (-1) or
+  // unresolvable plans (mock billing mode) never restrict this.
+  const creditCheck = await checkUsageLimit(workspaceId, "discovery_search_execution");
+  if (creditCheck.limit !== null) {
+    const remaining = Math.max(0, creditCheck.limit - creditCheck.current);
+    limit = Math.min(limit, remaining);
+  }
+  if (limit <= 0) {
+    return {
+      discoveryRunId: "",
+      status: "COMPLETED",
+      queriesExecuted: 0,
+      rawResultsFound: 0,
+      duplicatesFound: 0,
+      errorsCount: 0,
+      estimatedApiCost: 0,
+    };
+  }
 
   const queueFilter: Record<string, unknown> = { workspaceId, status: "QUEUED" };
   if (options.searchType) queueFilter.searchType = options.searchType;
@@ -285,6 +320,7 @@ export async function executeDiscoveryRun(
       { _id: run.id },
       { status: "FAILED", finishedAt: new Date(), queriesExecuted, rawResultsFound, duplicatesFound, errorsCount },
     );
+    await logDiscoveryUsage(workspaceId, queriesExecuted, rawResultsFound, options.searchType);
     return { discoveryRunId: run.id, status: "FAILED", queriesExecuted, rawResultsFound, duplicatesFound, errorsCount, estimatedApiCost };
   }
 
@@ -303,6 +339,7 @@ export async function executeDiscoveryRun(
 
   await refreshDimensionCoverage(workspaceId);
   await computeCoverageSnapshot(workspaceId);
+  await logDiscoveryUsage(workspaceId, queriesExecuted, rawResultsFound, options.searchType);
 
   return { discoveryRunId: run.id, status: "COMPLETED", queriesExecuted, rawResultsFound, duplicatesFound, errorsCount, estimatedApiCost };
 }

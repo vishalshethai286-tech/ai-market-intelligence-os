@@ -12,6 +12,7 @@ import { buildVendorRegistrationDuplicateKey, detectExistingVendorRegistration, 
 import { normalizeDomain } from "@/lib/dedup/normalize";
 import { DEFAULT_PROCESSING_BATCH_SIZE, MAX_PROCESSING_BATCH_SIZE } from "./constants";
 import { checkVendorRegistrationForDuplicates } from "@/lib/dedup/vendor-registration-service";
+import { checkUsageLimit } from "@/lib/billing/usage";
 import type { VendorRegistrationExtractionContext } from "./prompt";
 import type { BrainFact, BrainFactType, RawSearchResult } from "@/models";
 
@@ -32,6 +33,8 @@ export type ProcessVendorRegistrationResultsSummary = {
   duplicatesFound: number;
   autoMerged: number;
   pendingReview: number;
+  /** True when the batch didn't run at all because the workspace's plan is already at its VendorRegistration limit — see customers/processor.ts's identical field for the full rationale. */
+  limitReached: boolean;
 };
 
 function factValues(facts: BrainFact[], type: BrainFactType): string[] {
@@ -146,8 +149,14 @@ export async function processVendorRegistrationResults(
     duplicatesFound: 0,
     autoMerged: 0,
     pendingReview: 0,
+    limitReached: false,
   };
   if (results.length === 0) return summary;
+
+  const usageCheck = await checkUsageLimit(workspaceId, "vendor_registration_created");
+  if (!usageCheck.allowed) {
+    return { ...summary, limitReached: true };
+  }
 
   const { extractionContext, productIdByName } = await buildProcessingContext(workspaceId);
 

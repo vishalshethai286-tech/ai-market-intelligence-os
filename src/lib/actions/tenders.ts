@@ -7,6 +7,7 @@ import { processTenderResults, type ProcessTenderResultsOptions } from "@/lib/te
 import { updateTenderBuyerStatus, TenderBuyerNotFoundError } from "@/lib/tenders/buyer-service";
 import { updateTenderOpportunityStatus, TenderOpportunityNotFoundError } from "@/lib/tenders/opportunity-service";
 import { updateExpiredTenders } from "@/lib/tenders/expiry";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import type { TenderBuyerStatus, TenderOpportunityStatus } from "@/models";
 
 function revalidateTenderPaths() {
@@ -44,10 +45,12 @@ export async function processTenderResultsAction(
   }
 
   try {
+    enforceRateLimit(active.workspace.id, "process_extraction");
     const summary = await processTenderResults(active.workspace.id, input);
     revalidateTenderPaths();
     return { ok: true, ...summary };
-  } catch {
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) return { ok: false, error: error.message };
     return { ok: false, error: "Couldn't process tender results right now. Please try again." };
   }
 }

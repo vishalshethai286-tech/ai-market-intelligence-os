@@ -20,6 +20,7 @@ import { DEFAULT_PROCESSING_BATCH_SIZE, MAX_PROCESSING_BATCH_SIZE } from "./cons
 import { checkTenderBuyerForDuplicates } from "@/lib/dedup/tender-buyer-service";
 import { checkTenderOpportunityForDuplicates } from "@/lib/dedup/tender-opportunity-service";
 import { normalizeDomain } from "@/lib/dedup/normalize";
+import { checkUsageLimit } from "@/lib/billing/usage";
 import type { TenderExtractionContext } from "./prompt";
 import type { BrainFact, BrainFactType, RawSearchResult } from "@/models";
 
@@ -40,6 +41,8 @@ export type ProcessTenderResultsSummary = {
   duplicatesFound: number;
   autoMerged: number;
   pendingReview: number;
+  /** True when the batch didn't run at all because the workspace's plan is already at its TenderBuyer or TenderOpportunity limit (checked once per batch) — see customers/processor.ts's identical field for the full rationale. */
+  limitReached: boolean;
 };
 
 function factValues(facts: BrainFact[], type: BrainFactType): string[] {
@@ -117,8 +120,17 @@ export async function processTenderResults(
     duplicatesFound: 0,
     autoMerged: 0,
     pendingReview: 0,
+    limitReached: false,
   };
   if (results.length === 0) return summary;
+
+  const [buyerUsageCheck, opportunityUsageCheck] = await Promise.all([
+    checkUsageLimit(workspaceId, "tender_buyer_created"),
+    checkUsageLimit(workspaceId, "live_tender_created"),
+  ]);
+  if (!buyerUsageCheck.allowed && !opportunityUsageCheck.allowed) {
+    return { ...summary, limitReached: true };
+  }
 
   const { extractionContext, productIdByName } = await buildProcessingContext(workspaceId);
 

@@ -12,6 +12,7 @@ import type { ScorableProjectCandidate } from "./scoring";
 import { buildProjectDuplicateKey, detectExistingProjectByLink, detectExistingProjectByNameOwnerLocation } from "./duplicate";
 import { DEFAULT_PROCESSING_BATCH_SIZE, MAX_PROCESSING_BATCH_SIZE } from "./constants";
 import { checkProjectForDuplicates } from "@/lib/dedup/project-service";
+import { checkUsageLimit } from "@/lib/billing/usage";
 import type { ProjectExtractionContext } from "./prompt";
 import type { BrainFact, BrainFactType, RawSearchResult } from "@/models";
 
@@ -30,6 +31,8 @@ export type ProcessProjectResultsSummary = {
   duplicatesFound: number;
   autoMerged: number;
   pendingReview: number;
+  /** True when the batch didn't run at all because the workspace's plan is already at its ProjectOpportunity limit — see customers/processor.ts's identical field for the full rationale. */
+  limitReached: boolean;
 };
 
 function factValues(facts: BrainFact[], type: BrainFactType): string[] {
@@ -98,8 +101,14 @@ export async function processProjectResults(
     duplicatesFound: 0,
     autoMerged: 0,
     pendingReview: 0,
+    limitReached: false,
   };
   if (results.length === 0) return summary;
+
+  const usageCheck = await checkUsageLimit(workspaceId, "project_created");
+  if (!usageCheck.allowed) {
+    return { ...summary, limitReached: true };
+  }
 
   const { extractionContext, productIdByName } = await buildProcessingContext(workspaceId);
 

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getActiveWorkspace } from "@/lib/workspace";
 import { listProductServices } from "@/lib/product-discovery/service";
 import { toCsv } from "@/lib/export/csv";
+import { guardExport, UsageLimitExceededError, RateLimitExceededError } from "@/lib/export/guard";
 
 const CSV_COLUMNS = [
   "id",
@@ -28,6 +29,17 @@ export async function GET(request: Request) {
   }
 
   const format = new URL(request.url).searchParams.get("format") === "csv" ? "csv" : "json";
+
+  if (format === "csv") {
+    try {
+      await guardExport(active.workspace.id);
+    } catch (error) {
+      if (error instanceof UsageLimitExceededError) return NextResponse.json({ error: error.message }, { status: 403 });
+      if (error instanceof RateLimitExceededError) return NextResponse.json({ error: error.message }, { status: 429 });
+      throw error;
+    }
+  }
+
   const records = await listProductServices(active.workspace.id);
 
   if (format === "csv") {

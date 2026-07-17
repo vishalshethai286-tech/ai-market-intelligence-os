@@ -42,6 +42,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session): Promis
       $set: {
         planId: plan.id,
         status: "ACTIVE",
+        billingProvider: "STRIPE",
         stripeCustomerId: customerId ?? null,
         stripeSubscriptionId: subscriptionId ?? null,
         canceledAt: null,

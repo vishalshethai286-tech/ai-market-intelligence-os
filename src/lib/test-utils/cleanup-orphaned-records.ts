@@ -20,9 +20,19 @@ import {
   RawSearchResult,
   TargetCustomer,
   ProjectOpportunity,
+  TenderBuyer,
+  TenderOpportunity,
+  VendorRegistration,
+  Contact,
+  ContactActivity,
+  ContactTask,
+  ContactEmailTemplate,
+  ContactDiscoveryTarget,
+  ContactExtractionRun,
   DuplicateRecord,
   MergeHistory,
   SourceHistory,
+  Subscription,
 } from "@/models";
 
 export class TestDbCleanupNotAllowedError extends Error {}
@@ -65,9 +75,19 @@ const RELATED_MODELS = {
   RawSearchResult,
   TargetCustomer,
   ProjectOpportunity,
+  TenderBuyer,
+  TenderOpportunity,
+  VendorRegistration,
+  Contact,
+  ContactActivity,
+  ContactTask,
+  ContactEmailTemplate,
+  ContactDiscoveryTarget,
+  ContactExtractionRun,
   DuplicateRecord,
   MergeHistory,
   SourceHistory,
+  Subscription,
 } as const;
 
 export type CleanupOrphanedTestRecordsSummary = {

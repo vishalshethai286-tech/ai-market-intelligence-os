@@ -1,6 +1,6 @@
 export { User, PasswordResetToken } from "./User";
 export { Workspace, Role, WorkspaceMember, WorkspaceInvite, type WorkspaceMemberStatus, type WorkspaceInviteStatus } from "./Workspace";
-export { Plan, Subscription, type PlanKey, type BillingInterval, type SubscriptionStatus } from "./Billing";
+export { Plan, Subscription, type PlanKey, type BillingInterval, type SubscriptionStatus, type BillingProvider } from "./Billing";
 export { UsageLog, ApiCostLog, AuditLog } from "./Logs";
 export { WorkspaceOnboarding, type OnboardingStatus } from "./Onboarding";
 export { WebsiteAnalysis, WebsitePageSnapshot, type WebsiteAnalysisStatus } from "./WebsiteAnalysis";

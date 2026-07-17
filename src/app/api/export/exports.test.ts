@@ -7,7 +7,7 @@ vi.mock("next/headers", () => ({ cookies: mockCookies }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 
 const { dbConnect } = await import("@/lib/mongodb");
-const { User, Workspace, TargetCustomer, ProjectOpportunity, TenderBuyer, TenderOpportunity, VendorRegistration, Contact, DuplicateRecord } = await import("@/models");
+const { User, Workspace, Plan, Subscription, UsageLog, TargetCustomer, ProjectOpportunity, TenderBuyer, TenderOpportunity, VendorRegistration, Contact, DuplicateRecord } = await import("@/models");
 const { createWorkspaceWithOwner, ACTIVE_WORKSPACE_COOKIE } = await import("@/lib/workspace");
 
 const { GET: getCustomersCsv } = await import("./customers/route");
@@ -180,5 +180,27 @@ describe("CSV export routes", () => {
     mockAuth.mockResolvedValue(null);
     const response = await getCustomersCsv();
     expect(response.status).toBe(401);
+  });
+
+  it("returns 403 once the workspace's exportsPerMonth limit is reached", async () => {
+    mockAuth.mockResolvedValue({ user: { id: userId } });
+    mockCookies.mockResolvedValue({ get: (name: string) => (name === ACTIVE_WORKSPACE_COOKIE ? { value: workspaceId } : undefined) });
+
+    const subscription = await Subscription.findOne({ workspaceId });
+    const plan = await Plan.findById(subscription!.planId);
+    const originalLimits = { ...(plan!.usageLimits as Record<string, unknown>) };
+
+    try {
+      const alreadyUsed = await UsageLog.countDocuments({ workspaceId, metric: "export_generated" });
+      // Cap the limit at exactly what's already been logged by the tests above, so the very next export call is blocked.
+      await Plan.updateOne({ _id: plan!.id }, { $set: { "usageLimits.exportsPerMonth": alreadyUsed } });
+
+      const response = await getProjectsCsv();
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(body.error).toMatch(/usage limit exceeded/i);
+    } finally {
+      await Plan.updateOne({ _id: plan!.id }, { usageLimits: originalLimits });
+    }
   });
 });

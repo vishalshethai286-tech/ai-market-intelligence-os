@@ -8,6 +8,7 @@ import { generateContactSearchQueue, BrainNotReadyError } from "@/lib/contact-di
 import { processContactResults, type ProcessContactResultsOptions } from "@/lib/contact-discovery/processor";
 import { updateContactDiscoveryTargetStatus, ContactDiscoveryTargetNotFoundError } from "@/lib/contact-discovery/service";
 import { executeDiscoveryRun, DiscoveryBrainNotReadyError } from "@/lib/discovery-brain/executor";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import type { ContactDiscoveryTargetStatus } from "@/models";
 
 function revalidateContactDiscoveryPaths() {
@@ -153,6 +154,13 @@ export async function runPublicContactDiscoveryBatchAction(
   const active = await requireActiveWorkspace();
   if (!canManageDiscovery(active.role)) {
     return { ok: false, error: "You don't have access to run public contact discovery." };
+  }
+
+  try {
+    enforceRateLimit(active.workspace.id, "contact_discovery_batch");
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) return { ok: false, error: error.message };
+    throw error;
   }
 
   const warnings: string[] = [];

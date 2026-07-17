@@ -33,6 +33,7 @@ import { detectExistingContact, updateExistingContactWithBetterData, preserveCon
 import { computeContactScore } from "./scoring";
 import type { ContactScoringContext } from "./scoring";
 import { computeEnrichmentFields } from "./enrichment";
+import { enforceUsageLimit } from "@/lib/billing/usage";
 import { DEFAULT_ACTIVITY_PAGE_SIZE } from "./constants";
 
 export class ContactNotFoundError extends Error {}
@@ -183,6 +184,10 @@ export async function createContact(workspaceId: string, input: CreateContactInp
       return { contact: existingDoc.toObject() as Contact, outcome: "UPDATED_EXISTING" };
     }
   }
+
+  // Only genuinely new contacts count against the plan's contact limit —
+  // updating an existing one above never reaches this line.
+  await enforceUsageLimit(workspaceId, "contact_created");
 
   const created = await ContactModel.create({
     workspaceId,

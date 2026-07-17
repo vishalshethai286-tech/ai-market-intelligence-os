@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { dbConnect } from "@/lib/mongodb";
-import { Workspace, WorkspaceMember, Role, User } from "@/models";
+import { Workspace, WorkspaceMember, Role, User, Plan, Subscription } from "@/models";
 import type { Workspace as WorkspaceType, WorkspaceMember as WorkspaceMemberType, Role as RoleType } from "@/models";
 import { uniqueWorkspaceSlug } from "@/lib/slug";
 
@@ -113,20 +113,45 @@ export async function requireActiveWorkspace(): Promise<ActiveWorkspace> {
  */
 export async function createWorkspaceWithOwner(name: string, userId: string) {
   await dbConnect();
-  const ownerRole = await Role.findOne({ key: "OWNER" });
+  // Role and Plan lookups are independent of each other and of the slug —
+  // run them together rather than as 5 sequential round trips (matters on a
+  // real remote MongoDB instance, where each round trip has real latency).
+  const [ownerRole, freeTrialPlan, slug] = await Promise.all([
+    Role.findOne({ key: "OWNER" }),
+    Plan.findOne({ key: "FREE_TRIAL", isActive: true }),
+    uniqueWorkspaceSlug(name),
+  ]);
   if (!ownerRole) {
     throw new Error("Missing OWNER role — run `npm run seed`.");
   }
 
-  const slug = await uniqueWorkspaceSlug(name);
-
   const workspace = await Workspace.create({ name, slug });
-  await WorkspaceMember.create({
-    workspaceId: workspace.id,
-    userId,
-    roleId: ownerRole.id,
-    status: "ACTIVE",
-    joinedAt: new Date(),
-  });
+
+  // Every new workspace starts on a mock (no Stripe object) trial subscription
+  // so billing/usage-limit checks always have a Plan to compare against —
+  // skipped (not an error) if the seed script hasn't run yet in this
+  // environment, same graceful-degradation convention as every other
+  // optional-integration lookup in this app.
+  const now = new Date();
+  await Promise.all([
+    WorkspaceMember.create({
+      workspaceId: workspace.id,
+      userId,
+      roleId: ownerRole.id,
+      status: "ACTIVE",
+      joinedAt: new Date(),
+    }),
+    freeTrialPlan
+      ? Subscription.create({
+          workspaceId: workspace.id,
+          planId: freeTrialPlan.id,
+          status: "TRIALING",
+          billingProvider: "MOCK",
+          trialEndsAt: new Date(now.getTime() + (freeTrialPlan.trialDays as number) * 24 * 60 * 60 * 1000),
+          currentPeriodStart: now,
+        })
+      : null,
+  ]);
+
   return workspace;
 }

@@ -5,6 +5,7 @@ import { requireActiveWorkspace } from "@/lib/workspace";
 import { canManageDiscovery } from "@/lib/access-control";
 import { processVendorRegistrationResults, type ProcessVendorRegistrationResultsOptions } from "@/lib/vendor-registrations/processor";
 import { updateVendorRegistrationStatus, VendorRegistrationNotFoundError } from "@/lib/vendor-registrations/service";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import type { VendorRegistrationStatus } from "@/models";
 
 function revalidateVendorRegistrationPaths() {
@@ -42,10 +43,12 @@ export async function processVendorRegistrationResultsAction(
   }
 
   try {
+    enforceRateLimit(active.workspace.id, "process_extraction");
     const summary = await processVendorRegistrationResults(active.workspace.id, input);
     revalidateVendorRegistrationPaths();
     return { ok: true, ...summary };
-  } catch {
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) return { ok: false, error: error.message };
     return { ok: false, error: "Couldn't process vendor registration results right now. Please try again." };
   }
 }

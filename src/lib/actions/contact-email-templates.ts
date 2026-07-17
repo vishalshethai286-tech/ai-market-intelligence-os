@@ -16,6 +16,8 @@ import {
 } from "@/lib/contacts/email-drafts";
 import { addContactActivity } from "@/lib/contacts/service";
 import { ContactNotFoundError } from "@/lib/contacts/service";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
+import { incrementUsage } from "@/lib/billing/usage";
 import type { CreateContactEmailTemplateInput, UpdateContactEmailTemplateInput, GenerateContactEmailDraftInput } from "@/lib/contacts/email-drafts";
 
 function revalidateContactEmailTemplatePaths() {
@@ -98,10 +100,12 @@ export async function generateContactEmailDraftAction(input: GenerateContactEmai
   }
 
   try {
+    enforceRateLimit(active.workspace.id, "generate_email_draft");
     const draft = await generateContactEmailDraft(active.workspace.id, input);
+    await incrementUsage(active.workspace.id, "email_draft_generated");
     return { ok: true, subject: draft.subject, body: draft.body, templateId: draft.templateId };
   } catch (error) {
-    if (error instanceof ContactEmailTemplateNotFoundError || error instanceof ContactNotFoundForDraftError) {
+    if (error instanceof ContactEmailTemplateNotFoundError || error instanceof ContactNotFoundForDraftError || error instanceof RateLimitExceededError) {
       return { ok: false, error: error.message };
     }
     return { ok: false, error: "Couldn't generate an email draft right now. Please try again." };

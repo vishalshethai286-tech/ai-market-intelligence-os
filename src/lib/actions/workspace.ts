@@ -13,6 +13,7 @@ import {
   requireActiveWorkspace,
 } from "@/lib/workspace";
 import { canInviteMembers, canManageWorkspace } from "@/lib/access-control";
+import { checkSeatLimit } from "@/lib/billing/usage";
 import { sendEmail } from "@/lib/email/service";
 import { workspaceInviteEmail } from "@/lib/email/templates";
 import {
@@ -123,6 +124,11 @@ export async function inviteMember(
   }
 
   const { email, role: roleKey } = validatedFields.data;
+
+  const seatCheck = await checkSeatLimit(active.workspace.id);
+  if (!seatCheck.allowed) {
+    return { message: `Your plan allows up to ${seatCheck.limit} member${seatCheck.limit === 1 ? "" : "s"}. Upgrade your plan to invite more.` };
+  }
 
   await dbConnect();
   const [role, existingUser] = await Promise.all([Role.findOne({ key: roleKey }), User.findOne({ email })]);

@@ -6,6 +6,7 @@ import { requireActiveWorkspace } from "@/lib/workspace";
 import { canManageDiscovery } from "@/lib/access-control";
 import { processProjectResults, type ProcessProjectResultsOptions } from "@/lib/projects/processor";
 import { updateProjectStatus, ProjectNotFoundError } from "@/lib/projects/service";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import { recordFeedback, BrainFeedbackTargetError } from "@/lib/business-brain/service";
 import { dbConnect } from "@/lib/mongodb";
 import { ProjectOpportunity as ProjectOpportunityModel } from "@/models";
@@ -42,10 +43,12 @@ export async function processProjectResultsAction(
   }
 
   try {
+    enforceRateLimit(active.workspace.id, "process_extraction");
     const summary = await processProjectResults(active.workspace.id, input);
     revalidateProjectPaths();
     return { ok: true, ...summary };
-  } catch {
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) return { ok: false, error: error.message };
     return { ok: false, error: "Couldn't process project results right now. Please try again." };
   }
 }

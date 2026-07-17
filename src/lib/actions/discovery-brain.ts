@@ -5,6 +5,7 @@ import { requireActiveWorkspace } from "@/lib/workspace";
 import { canManageDiscovery } from "@/lib/access-control";
 import { generateDiscoveryQueue, BrainNotReadyError } from "@/lib/discovery-brain/service";
 import { executeDiscoveryRun, DiscoveryBrainNotReadyError, type ExecuteDiscoveryRunOptions } from "@/lib/discovery-brain/executor";
+import { enforceRateLimit, RateLimitExceededError } from "@/lib/rate-limit";
 import type { SearchType } from "@/models";
 
 export type GenerateDiscoveryQueueActionResult =
@@ -60,6 +61,7 @@ export async function runDiscoveryNowAction(input: RunDiscoveryNowInput = {}): P
   };
 
   try {
+    enforceRateLimit(active.workspace.id, "run_discovery");
     const result = await executeDiscoveryRun(active.workspace.id, options);
     revalidatePath("/dashboard/discovery-brain");
     revalidatePath("/dashboard/discovery-runs");
@@ -67,6 +69,7 @@ export async function runDiscoveryNowAction(input: RunDiscoveryNowInput = {}): P
     return { ok: true, ...result };
   } catch (error) {
     if (error instanceof DiscoveryBrainNotReadyError) return { ok: false, error: error.message };
+    if (error instanceof RateLimitExceededError) return { ok: false, error: error.message };
     return { ok: false, error: "Couldn't run discovery right now. Please try again." };
   }
 }

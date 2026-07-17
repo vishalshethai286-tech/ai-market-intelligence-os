@@ -17,6 +17,9 @@ const PlanSchema = new Schema(
     billingInterval: { type: String, enum: ["MONTHLY", "YEARLY"], default: "MONTHLY" },
     trialDays: { type: Number, default: 0 },
     stripePriceId: { type: String },
+    /** Optional — a plan can also be purchased yearly at a discount via a second Stripe Price. Both are attached to the same Plan document (rather than a second MONTHLY/YEARLY document per plan) since `key` is unique per plan tier. */
+    yearlyPriceCents: { type: Number },
+    stripeYearlyPriceId: { type: String },
     maxSeats: { type: Number },
     maxWorkspaces: { type: Number },
     usageLimits: { type: Schema.Types.Mixed, default: {} },
@@ -43,6 +46,8 @@ export type Plan = {
   billingInterval: BillingInterval;
   trialDays: number;
   stripePriceId: string | null;
+  yearlyPriceCents: number | null;
+  stripeYearlyPriceId: string | null;
   maxSeats: number | null;
   maxWorkspaces: number | null;
   usageLimits: Record<string, unknown>;
@@ -66,6 +71,8 @@ const SubscriptionSchema = new Schema(
       index: true,
     },
     seats: { type: Number, default: 1 },
+    /** STRIPE = a real subscription synced from Stripe webhooks; MOCK = a locally-created subscription (e.g. the trial every new workspace gets) with no Stripe object behind it yet. Lets billing UI/logic distinguish "really billed" from "mock/trial only" without inferring it from which fields happen to be null. */
+    billingProvider: { type: String, enum: ["STRIPE", "MOCK"], default: "MOCK", index: true },
     currentPeriodStart: { type: Date },
     currentPeriodEnd: { type: Date },
     trialEndsAt: { type: Date },
@@ -81,6 +88,7 @@ const SubscriptionSchema = new Schema(
 export const Subscription = models.Subscription ?? model("Subscription", SubscriptionSchema);
 
 export type SubscriptionStatus = "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED" | "EXPIRED" | "INCOMPLETE";
+export type BillingProvider = "STRIPE" | "MOCK";
 
 export type Subscription = {
   id: string;
@@ -88,6 +96,7 @@ export type Subscription = {
   planId: string;
   status: SubscriptionStatus;
   seats: number;
+  billingProvider: BillingProvider;
   currentPeriodStart: Date | null;
   currentPeriodEnd: Date | null;
   trialEndsAt: Date | null;

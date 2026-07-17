@@ -504,3 +504,112 @@ npm run build          # Production build (also type-checks)
 - No `ANTHROPIC_API_KEY` is configured in this environment, so [AI Extraction Service](#ai-extraction-service) runs its mock path by default — verified end-to-end live (signup → website/email/countries/customer-types steps → real website analysis against `https://example.com` → page snapshot storage → mock company-profile generation with onboarding fields correctly denormalized → dashboard rendering the onboarding-complete badge and profile summary) plus the DB-level create/update/approve/reject/delete/regenerate-preserves-approved logic for both `company-profile` and `product-discovery`. The real (non-mock) Claude call paths in `extract.ts` for both modules are unchanged from before and still untested against a live API call — set a real key in `.env` locally and in Vercel's env vars before relying on them in production.
 - `buildInitialBrain()` (`src/lib/business-brain/service.ts`) was verified end-to-end through the real running app (seeded an approved profile + mixed-status products, ran onboarding's Finish step, confirmed the fact/entity/relationship counts and dedup by querying the DB directly) — but without `ANTHROPIC_API_KEY`, `identifyCompetitors()` fails open and every brain built so far has zero competitors. That's by design (fail-open, not a required step) but means the competitor path itself hasn't been exercised against a real response.
 - The `/dashboard/business-brain` review page was verified live in the browser (seeded a full fact set including a competitor, marked facts Correct/Incorrect and confirmed the badge/button state updates and persists on reload) at mobile, tablet-width, and desktop viewports — the fact-row layout deliberately stacks unconditionally (value, then metadata, then status/buttons) rather than switching to a side-by-side row at a breakpoint, since the sidebar's width means the usable content column is narrower than the raw viewport width would suggest.
+
+> **Note on this README:** everything above this point (Prisma/PostgreSQL setup, `prisma/schema.prisma`, `npx prisma migrate/generate/db seed`) describes an earlier version of this app. The project has since migrated to **MongoDB/Mongoose** and grown substantially (Discovery Brain, Contacts CRM, Public Contact Discovery, deduplication engine, and the SaaS billing/admin/security layer below) — the sections above are stale and kept for historical context rather than rewritten wholesale. The section below is current and is the one to follow for local setup, deployment, and the production checklist.
+
+## SaaS Launch Setup (current)
+
+### Local setup (MongoDB)
+
+1. **Install dependencies**
+
+   ```bash
+   npm install
+   ```
+
+2. **Set up MongoDB and configure environment variables**
+
+   Copy `.env.example` to `.env` and fill in real values (see [Environment Setup](#environment-setup) above for the full variable reference — the Stripe/rate-limiting/platform-admin variables described below were added in Phase 12). At minimum you need `MONGODB_URI`, `AUTH_SECRET`, and `NEXT_PUBLIC_APP_URL` — the app won't start without them (`src/lib/env.ts`).
+
+   - **Local dev**: install MongoDB Community Server and use `MONGODB_URI="mongodb://localhost:27017/ai_market_intelligence_os"` as-is.
+   - **Production**: use a MongoDB Atlas connection string instead.
+
+   No migration step is needed — Mongoose schemas apply themselves on first write; there's no schema file to `generate`/`deploy` the way Prisma required.
+
+3. **Seed reference data (roles + subscription plans)**
+
+   ```bash
+   npm run seed
+   ```
+
+   Upserts the system roles (`OWNER`, `ADMIN`, `MANAGER`, `USER`, `VIEWER`, `PLATFORM_ADMIN`) and the 6 subscription plans (Free Trial, Starter, Professional, Business, Growth, Enterprise) with their `usageLimits` — safe to re-run. The `OWNER` role and `FREE_TRIAL` plan must exist before anyone can sign up: `createWorkspaceWithOwner()` (`src/lib/workspace.ts`) throws if the `OWNER` role is missing, and silently skips auto-creating a trial `Subscription` if the `FREE_TRIAL` plan isn't seeded yet (fails open, not a hard error — see [Billing & Usage Limits](#billing--usage-limits-phase-12) below).
+
+4. **Run the dev server**
+
+   ```bash
+   npm run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000) for the landing page and [http://localhost:3000/dashboard](http://localhost:3000/dashboard) for the dashboard shell.
+
+### Running tests
+
+```bash
+npm test               # Vitest — full suite, real MongoDB, no live external API calls
+npm run lint            # ESLint
+npx tsc --noEmit        # Type-check
+npm run check:schema    # Every model has workspaceId + advisory query-scoping scan
+npm run build            # Production build (also type-checks)
+```
+
+The test suite never calls a real AI provider, search provider, or Stripe by default — see [Mock mode](#mock-mode) below. A handful of tests are explicitly gated behind live-API opt-in env vars (`RUN_LIVE_AI_TESTS`, `RUN_LIVE_STRIPE_TESTS`) and are skipped unless you set them.
+
+### Mock mode
+
+Every external integration in this app degrades gracefully without a real key configured — this is a deliberate, consistent convention, not a Phase 12 addition:
+
+| Integration | Mock trigger | Real trigger |
+| --- | --- | --- |
+| AI extraction (Anthropic) | `ENABLE_MOCK_AI=true`, or automatically whenever `ANTHROPIC_API_KEY` is unset | `ANTHROPIC_API_KEY` set, `ENABLE_MOCK_AI` unset/false |
+| Search | `ENABLE_MOCK_SEARCH=true`, or automatically whenever `SEARCH_PROVIDER`'s key is missing (outside production) | `SEARCH_PROVIDER` set to a configured provider with its key present |
+| Billing (Stripe) | No `STRIPE_SECRET_KEY` — every new workspace gets a `billingProvider: "MOCK"` trial `Subscription`; usage limits are still enforced against the seeded Plan, but no payment is collected and Upgrade/Portal/Cancel show a clear "not configured" message | `STRIPE_SECRET_KEY` (+ `STRIPE_WEBHOOK_SECRET` for webhook sync) set |
+| Email (Resend) | No `RESEND_API_KEY` — `sendEmail()` logs instead of sending | `RESEND_API_KEY` set |
+| Rate limiting | Always bypassed outside `NODE_ENV=production` unless `RATE_LIMIT_ENABLED=true` | `NODE_ENV=production`, or `RATE_LIMIT_ENABLED=true` explicitly |
+
+Nothing above ever blocks local development or the test suite from working end-to-end.
+
+### Vercel deployment
+
+1. Import the repo into Vercel and set every **required** env var (`MONGODB_URI` pointing at an Atlas cluster, `AUTH_SECRET`, `NEXT_PUBLIC_APP_URL` set to the real deployment URL) plus whichever optional integrations you want live (Stripe, Anthropic, a real search provider, Resend).
+2. Run `npm run seed` once against the production database (e.g. via a one-off local run pointed at the Atlas `MONGODB_URI`, or a Vercel deploy hook) before onboarding any real users — sign-up fails without the seeded `OWNER` role.
+3. `src/instrumentation.ts` validates required env vars on server start; Vercel's per-request import path is additionally gated in `src/lib/mongodb.ts` (see `PROJECT_STATUS.md` for why both checks exist).
+
+#### Stripe webhook setup
+
+1. In the Stripe dashboard, add an endpoint pointing at `https://<your-domain>/api/webhooks/stripe`, subscribed to `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`.
+2. Copy the endpoint's signing secret into `STRIPE_WEBHOOK_SECRET`. Without it, `POST /api/webhooks/stripe` returns 500 rather than accepting unverified events (`src/app/api/webhooks/stripe/route.ts`).
+3. Set each `Plan.stripePriceId`/`stripeYearlyPriceId` you want self-serve checkout for to a real Stripe Price id — plans without one show "Contact sales" instead of an Upgrade button (`src/lib/billing/checkout.ts`).
+4. Test locally with the Stripe CLI: `stripe listen --forward-to localhost:3000/api/webhooks/stripe`.
+
+#### Cron setup
+
+Two cron-ready routes exist but aren't wired into `vercel.json`'s `crons` yet: `GET /api/cron/discovery` (older continuous target-company discovery) and `GET /api/cron/discovery-run` (the Discovery Brain's daily Search Execution Engine batch). Add them to `vercel.json` when you're ready to automate discovery, and set `CRON_SECRET` — in production a missing/wrong `Authorization: Bearer <CRON_SECRET>` header is rejected; outside production the routes run unauthenticated so they're exercisable locally.
+
+### Production checklist
+
+- [ ] `MONGODB_URI` points at a production Atlas cluster (not the local/dev instance)
+- [ ] `AUTH_SECRET` is a real random value, not the placeholder
+- [ ] `NEXT_PUBLIC_APP_URL` matches the real deployment domain (used in checkout/portal/webhook-invite links)
+- [ ] `npm run seed` has been run against the production database at least once
+- [ ] `PLATFORM_ADMIN_EMAILS` is set to the real platform team's emails, not left empty
+- [ ] `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` are set (or intentionally left unset for a mock-billing soft launch)
+- [ ] Each `Plan` you want self-serve checkout for has a real `stripePriceId` (and `stripeYearlyPriceId` if offering annual billing)
+- [ ] `ANTHROPIC_API_KEY` is set if AI extraction should run for real, not mock
+- [ ] `SEARCH_PROVIDER` + its API key are set if discovery should hit a real search API, not mock
+- [ ] `RESEND_API_KEY` + `EMAIL_FROM` are set so password reset/invite emails actually send
+- [ ] `RATE_LIMIT_ENABLED` — leave unset (defaults on in production) unless you have a specific reason to disable it
+- [ ] `RUN_LIVE_AI_TESTS`/`RUN_LIVE_STRIPE_TESTS` are **not** set in CI/normal test runs — they're opt-in only, for manually verifying live integrations
+- [ ] `npm run check:schema` passes (workspace-scoping schema check, plus review the advisory query-scoping output)
+- [ ] `npm test`, `npm run lint`, `npx tsc --noEmit`, `npm run build` all pass
+
+## Billing & Usage Limits (Phase 12)
+
+`src/lib/billing/usage.ts` — plan-limit enforcement on top of the `Plan`/`Subscription` models described above, added to prepare the app for commercial launch.
+
+- **Two kinds of limit**: "record count" limits (customers/projects/tender buyers/live tenders/vendor registrations/contacts/products-services) are checked by counting the live collection directly — no separate counter to keep in sync. "Monthly flow" limits (discovery credits, exports, email drafts, AI extraction calls, contact discovery searches, raw search results) are metered via `UsageLog` rows summed within the current billing/trial period, logged via `incrementUsage()`.
+- **Fails open**: every check treats a missing `Subscription`/`Plan`, or a `-1`/unset limit, as unlimited — this is what "safe mock billing mode" means in practice; a workspace is never blocked unless a real Plan with a real numeric limit is seeded and linked.
+- **Enforced at**: discovery run batch sizing (`src/lib/discovery-brain/executor.ts` — discovery credits cap how many queued searches a batch runs, not whether it runs at all), the 4 raw-result processors (customers/projects/tenders/vendor-registrations — batch-level, checked once per call rather than per record), `createContact`, all 20 CSV export routes (`src/lib/export/guard.ts`), member invites (seat limit, `src/lib/actions/workspace.ts`), and generated email drafts.
+- **`/dashboard/billing`** shows the current plan, subscription status, trial/billing-cycle dates, a mock-billing-mode notice, usage meters per metric, and (when Stripe is configured) Upgrade/Billing-Portal/Cancel-subscription actions. **`/dashboard/usage`** shows the same usage data broken out by category with the monthly reset date and recent activity.
+- **`src/lib/rate-limit.ts`** — a separate, simpler in-memory limiter (not plan-based) applied to the same handful of expensive actions plus billing checkout creation, to blunt runaway/scripted abuse independent of plan limits.
+- **`src/lib/auth/permissions.ts`** — a named-permission facade (`view_dashboard`/`run_discovery`/`process_extraction`/`manage_records`/`export_data`/`manage_contacts`/`manage_billing`/`manage_workspace`/`view_admin`) over the existing role checks in `access-control.ts`, for call sites that prefer asking "can this role do X" by name.
+- **`/platform-admin`** was extended with read-only Subscriptions, Usage, Discovery Runs, Search Errors, API Cost Logs, Duplicate Statistics, Export Logs, and System Health sections (all still under the existing `/platform-admin` route rather than a new `/dashboard/admin` — see `PROJECT_STATUS.md` for why).
