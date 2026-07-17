@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DISCOVERY_MAX_TOKENS, DISCOVERY_MODEL, MAX_PRODUCTS_PER_RUN } from "./constants";
 import { buildDiscoveryPrompt, DISCOVERY_SYSTEM_PROMPT } from "./prompt";
 import { buildDiscoveryJsonSchema, type ExtractedProductService } from "./schema";
-import type { FetchedPage } from "./fetch-pages";
+import type { PageContent } from "./types";
 
 export class DiscoveryError extends Error {}
 
@@ -24,7 +24,7 @@ function toStringArray(value: unknown): string[] {
  * (both by the request schema and defensively again here) to the URLs in
  * `pages` — the model can only cite a page it was actually given.
  */
-export async function extractProductServices(pages: FetchedPage[]): Promise<ExtractedProductService[]> {
+export async function extractProductServices(pages: PageContent[]): Promise<ExtractedProductService[]> {
   if (pages.length === 0) {
     throw new DiscoveryError("No page content available to extract products or services from.");
   }
@@ -70,6 +70,7 @@ export async function extractProductServices(pages: FetchedPage[]): Promise<Extr
 
     return {
       name: name || "Untitled product/service",
+      type: item.type === "SERVICE" ? "SERVICE" : "PRODUCT",
       category: typeof item.category === "string" ? item.category : "",
       subcategory: typeof item.subcategory === "string" ? item.subcategory : "",
       description: typeof item.description === "string" ? item.description : "",
@@ -77,6 +78,11 @@ export async function extractProductServices(pages: FetchedPage[]): Promise<Extr
       targetIndustries: toStringArray(item.targetIndustries),
       buyerTypes: toStringArray(item.buyerTypes),
       keywords: toStringArray(item.keywords),
+      synonyms: toStringArray(item.synonyms),
+      relatedProductsServices: toStringArray(item.relatedProductsServices),
+      projectKeywords: toStringArray(item.projectKeywords),
+      tenderKeywords: toStringArray(item.tenderKeywords),
+      vendorRegistrationKeywords: toStringArray(item.vendorRegistrationKeywords),
       sourceUrls: toStringArray(item.sourceUrls).filter((url) => sourceUrlChoices.includes(url)),
       confidenceScore: clampConfidence(item.confidenceScore),
     };

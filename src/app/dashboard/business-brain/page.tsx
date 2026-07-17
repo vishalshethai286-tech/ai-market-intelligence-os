@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { requireActiveWorkspace } from "@/lib/workspace";
 import { canReviewBrainFacts } from "@/lib/access-control";
 import { getBusinessBrain, getFeedbackCountsByFact, listBrainFacts } from "@/lib/business-brain/service";
-import type { BrainFact, BrainFactType } from "@/generated/prisma/client";
+import type { BrainFact, BrainFactType } from "@/models";
 import { Badge } from "@/components/ui/badge";
 import { FactRow, type FeedbackKind } from "@/components/business-brain/fact-row";
 import { RefreshBrainButton } from "@/components/business-brain/refresh-brain-button";
@@ -30,9 +30,14 @@ const SECTIONS: { label: string; types: BrainFactType[] }[] = [
     ],
   },
   { label: "Products & services", types: ["PRODUCT_OR_SERVICE"] },
+  { label: "Applications", types: ["APPLICATION"] },
   { label: "Target industries", types: ["TARGET_INDUSTRY"] },
   { label: "Buyer personas", types: ["BUYER_TYPE"] },
-  { label: "Keywords", types: ["KEYWORD"] },
+  { label: "Search keywords", types: ["KEYWORD"] },
+  { label: "Project keywords", types: ["PROJECT_KEYWORD"] },
+  { label: "Tender keywords", types: ["TENDER_KEYWORD"] },
+  { label: "Vendor registration keywords", types: ["VENDOR_REGISTRATION_KEYWORD"] },
+  { label: "Buying signals", types: ["BUYING_SIGNAL"] },
   { label: "Competitors", types: ["COMPETITOR"] },
 ];
 

@@ -5,8 +5,12 @@ export const PAGE_CATEGORIES = [
   "service",
   "about",
   "industries",
+  "applications",
   "catalog",
   "contact",
+  "downloads",
+  "blog",
+  "news",
 ] as const;
 
 export type PageCategory = (typeof PAGE_CATEGORIES)[number];
@@ -16,8 +20,12 @@ const CATEGORY_KEYWORDS: Record<PageCategory, string[]> = {
   service: ["service", "services", "capabilities", "what-we-do"],
   about: ["about", "about-us", "who-we-are", "our-story", "company", "team", "leadership"],
   industries: ["industries", "industry", "sectors", "sector", "markets", "verticals"],
+  applications: ["applications", "application", "use-cases", "use-case", "uses"],
   catalog: ["catalog", "catalogue", "shop", "store", "pricing", "plans"],
   contact: ["contact", "contact-us", "get-in-touch", "support", "enquiry", "inquiry", "quote"],
+  downloads: ["downloads", "download", "resources", "brochure", "brochures", "datasheet", "datasheets", "whitepaper"],
+  blog: ["blog", "articles", "insights"],
+  news: ["news", "press", "press-release", "media"],
 };
 
 function normalize(value: string): string {

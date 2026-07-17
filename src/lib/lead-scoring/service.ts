@@ -1,9 +1,10 @@
 import "server-only";
-import { prisma } from "@/lib/prisma";
+import { dbConnect } from "@/lib/mongodb";
+import { TargetCompany as TargetCompanyModel, BrainFeedback as BrainFeedbackModel } from "@/models";
 import { getBusinessBrain, listBrainFacts, BrainNotReadyError } from "@/lib/business-brain/service";
 import { computeLeadScore } from "./scoring";
 import type { LeadScoringContext } from "./scoring";
-import type { BrainFact, BrainFactType } from "@/generated/prisma/client";
+import type { BrainFact, BrainFactType, TargetCompany } from "@/models";
 
 export { BrainNotReadyError };
 export class TargetCompanyNotFoundError extends Error {}
@@ -21,16 +22,14 @@ function factValues(facts: BrainFact[], type: BrainFactType): string[] {
  * added specifically for lead feedback before this model existed).
  */
 async function buildScoringContext(workspaceId: string): Promise<LeadScoringContext> {
+  await dbConnect();
   const [facts, goodLeadReferences, feedbackRows] = await Promise.all([
     listBrainFacts(workspaceId),
-    prisma.targetCompany.findMany({
-      where: { workspaceId, status: "APPROVED" },
-      select: { id: true, industry: true, buyerType: true, matchedProduct: true, country: true },
-    }),
-    prisma.brainFeedback.findMany({
-      where: { workspaceId, feedbackType: { in: ["GOOD_LEAD", "BAD_LEAD"] } },
-      select: { feedbackType: true, subjectLabel: true },
-    }),
+    TargetCompanyModel.find(
+      { workspaceId, status: "APPROVED" },
+      { industry: 1, buyerType: 1, matchedProduct: 1, country: 1 },
+    ),
+    BrainFeedbackModel.find({ workspaceId, feedbackType: { $in: ["GOOD_LEAD", "BAD_LEAD"] } }, { feedbackType: 1, subjectLabel: 1 }),
   ]);
 
   const feedbackByCompanyKey = new Map<string, { good: number; bad: number }>();
@@ -55,7 +54,8 @@ async function buildScoringContext(workspaceId: string): Promise<LeadScoringCont
 
 /** Scores a single target company and persists `priorityScore`/`priorityGrade`. */
 export async function scoreTargetCompany(workspaceId: string, targetCompanyId: string) {
-  const target = await prisma.targetCompany.findFirst({ where: { id: targetCompanyId, workspaceId } });
+  await dbConnect();
+  const target = await TargetCompanyModel.findOne({ _id: targetCompanyId, workspaceId });
   if (!target) {
     throw new TargetCompanyNotFoundError("That target company doesn't exist in this workspace.");
   }
@@ -63,12 +63,13 @@ export async function scoreTargetCompany(workspaceId: string, targetCompanyId: s
   const context = await buildScoringContext(workspaceId);
   const breakdown = computeLeadScore(target, context);
 
-  const updated = await prisma.targetCompany.update({
-    where: { id: target.id },
-    data: { priorityScore: breakdown.totalScore, priorityGrade: breakdown.grade },
-  });
+  const updated = await TargetCompanyModel.findByIdAndUpdate(
+    target.id,
+    { priorityScore: breakdown.totalScore, priorityGrade: breakdown.grade },
+    { new: true },
+  );
 
-  return { target: updated, breakdown };
+  return { target: updated!.toObject() as TargetCompany, breakdown };
 }
 
 /**
@@ -82,18 +83,16 @@ export async function scoreAllTargetCompanies(workspaceId: string) {
     throw new BrainNotReadyError("Build the initial Business Brain before scoring target companies.");
   }
 
-  const [context, targets] = await Promise.all([
-    buildScoringContext(workspaceId),
-    prisma.targetCompany.findMany({ where: { workspaceId } }),
-  ]);
+  await dbConnect();
+  const [context, targets] = await Promise.all([buildScoringContext(workspaceId), TargetCompanyModel.find({ workspaceId })]);
 
   let scored = 0;
   for (const target of targets) {
     const breakdown = computeLeadScore(target, context);
-    await prisma.targetCompany.update({
-      where: { id: target.id },
-      data: { priorityScore: breakdown.totalScore, priorityGrade: breakdown.grade },
-    });
+    await TargetCompanyModel.updateOne(
+      { _id: target.id },
+      { priorityScore: breakdown.totalScore, priorityGrade: breakdown.grade },
+    );
     scored += 1;
   }
 

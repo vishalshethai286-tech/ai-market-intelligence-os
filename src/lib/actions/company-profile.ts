@@ -11,6 +11,7 @@ import {
   NoAnalysisError,
 } from "@/lib/company-profile/service";
 import { ExtractionError } from "@/lib/company-profile/extract";
+import { AIExtractionValidationError } from "@/lib/ai-extraction";
 import { CompanyProfileSchema, toList, type CompanyProfileFormState } from "@/lib/validations/company-profile";
 
 // Revalidated everywhere a profile can be viewed/edited: the dashboard page
@@ -35,9 +36,13 @@ export async function regenerateCompanyProfileAction(): Promise<{ error?: string
     if (error instanceof NoAnalysisError) {
       return { error: error.message };
     }
-    if (error instanceof ExtractionError) {
+    if (error instanceof ExtractionError || error instanceof AIExtractionValidationError) {
       return { error: error.message };
     }
+    // Anything else (e.g. the Anthropic API rejecting the request) is
+    // unexpected — logged here since the user-facing message deliberately
+    // stays generic rather than leaking a raw API error.
+    console.error("regenerateCompanyProfileAction failed:", error);
     return { error: "Couldn't generate a profile right now. Please try again." };
   }
 
@@ -55,10 +60,14 @@ export async function updateCompanyProfileAction(
 
   const validatedFields = CompanyProfileSchema.safeParse({
     companyName: formData.get("companyName"),
+    website: formData.get("website"),
+    workEmail: formData.get("workEmail"),
     businessDescription: formData.get("businessDescription"),
     industry: formData.get("industry"),
     businessModel: formData.get("businessModel"),
     countriesServed: toList(formData.get("countriesServed")),
+    targetCountries: toList(formData.get("targetCountries")),
+    preferredCustomerTypes: toList(formData.get("preferredCustomerTypes")),
     headquarters: formData.get("headquarters"),
     operationType: formData.get("operationType"),
     certifications: toList(formData.get("certifications")),

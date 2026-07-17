@@ -1,6 +1,6 @@
 import "server-only";
 import { MAX_PRODUCTS_PER_RUN } from "./constants";
-import type { FetchedPage } from "./fetch-pages";
+import type { PageContent } from "./types";
 
 export const DISCOVERY_SYSTEM_PROMPT = `You are a market intelligence analyst. You are given the content of one or
 more pages from a single company's website and asked to identify every distinct product or service the company
@@ -8,9 +8,14 @@ offers.
 
 Only use what's in the provided content. Do not invent products or services that aren't actually mentioned, and do
 not rely on outside knowledge of the company. If the same product or service appears on more than one page, merge it
-into a single record rather than listing it twice, and cite every page it appears on.`;
+into a single record rather than listing it twice, and cite every page it appears on.
 
-export function buildDiscoveryPrompt(pages: FetchedPage[]): string {
+For each item, in addition to the descriptive fields, suggest search-oriented keyword lists a sales team could use to
+find real-world opportunities: projectKeywords (active projects needing this), tenderKeywords (public tenders/RFPs
+calling for this), and vendorRegistrationKeywords (vendor/supplier registration programs relevant to this). Leave any
+of these empty if nothing sensible comes to mind — don't pad them with generic filler.`;
+
+export function buildDiscoveryPrompt(pages: PageContent[]): string {
   const sections = pages
     .map(
       (page, index) =>

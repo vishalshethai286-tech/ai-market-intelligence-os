@@ -33,6 +33,7 @@ export const exaSearchProvider: SearchProvider = {
       body: JSON.stringify({ query, numResults: maxResults, contents: { text: true } }),
     });
 
+    const retrievedAt = new Date();
     return (data.results ?? [])
       .filter((item) => Boolean(item.url))
       .slice(0, maxResults)
@@ -42,6 +43,8 @@ export const exaSearchProvider: SearchProvider = {
         url: item.url!,
         domain: domainFromUrl(item.url!),
         provider: "EXA" as const,
+        retrievedAt,
+        rawPayload: item,
       }));
   },
 };

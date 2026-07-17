@@ -1,6 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import type { WebsiteAnalysis } from "@/generated/prisma/client";
+import type { WebsiteAnalysis } from "@/models";
 import { EXTRACTION_MAX_TOKENS, EXTRACTION_MODEL } from "./constants";
 import { buildExtractionPrompt, EXTRACTION_SYSTEM_PROMPT } from "./prompt";
 import { EXTRACTION_JSON_SCHEMA, type ExtractedCompanyProfile } from "./schema";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import type { CompanyProfile } from "@/generated/prisma/client";
+import type { CompanyProfile } from "@/models";
 import { updateCompanyProfileAction } from "@/lib/actions/company-profile";
 import { OPERATION_TYPE_LABELS, OPERATION_TYPES } from "@/lib/company-profile/constants";
 import { Input } from "@/components/ui/input";
@@ -63,6 +63,25 @@ export function CompanyProfileForm({
               className="mt-1"
             />
             <FieldError>{state?.errors?.companyName}</FieldError>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="website">Website</Label>
+              <Input id="website" name="website" defaultValue={profile.website ?? ""} className="mt-1" />
+              <FieldError>{state?.errors?.website}</FieldError>
+            </div>
+            <div>
+              <Label htmlFor="workEmail">Work email</Label>
+              <Input
+                id="workEmail"
+                name="workEmail"
+                type="email"
+                defaultValue={profile.workEmail ?? ""}
+                className="mt-1"
+              />
+              <FieldError>{state?.errors?.workEmail}</FieldError>
+            </div>
           </div>
 
           <div>
@@ -135,6 +154,31 @@ export function CompanyProfileForm({
               className="mt-1"
             />
             <FieldError>{state?.errors?.countriesServed}</FieldError>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="targetCountries">Target countries</Label>
+              <Input
+                id="targetCountries"
+                name="targetCountries"
+                defaultValue={profile.targetCountries.join(", ")}
+                placeholder="ISO codes or WORLDWIDE, comma-separated"
+                className="mt-1"
+              />
+              <FieldError>{state?.errors?.targetCountries}</FieldError>
+            </div>
+            <div>
+              <Label htmlFor="preferredCustomerTypes">Preferred customer types</Label>
+              <Input
+                id="preferredCustomerTypes"
+                name="preferredCustomerTypes"
+                defaultValue={profile.preferredCustomerTypes.join(", ")}
+                placeholder="Comma-separated"
+                className="mt-1"
+              />
+              <FieldError>{state?.errors?.preferredCustomerTypes}</FieldError>
+            </div>
           </div>
 
           <div>

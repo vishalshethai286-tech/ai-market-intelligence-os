@@ -2,13 +2,17 @@ import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import { dbConnect } from "@/lib/mongodb";
+import { Workspace, WorkspaceMember, Role, User } from "@/models";
+import type { Workspace as WorkspaceType, WorkspaceMember as WorkspaceMemberType, Role as RoleType } from "@/models";
 import { uniqueWorkspaceSlug } from "@/lib/slug";
-import type { Prisma } from "@/generated/prisma/client";
 
 export const ACTIVE_WORKSPACE_COOKIE = "active_workspace";
 
-export type MembershipWithWorkspaceAndRole = Awaited<ReturnType<typeof listMemberships>>[number];
+export type MembershipWithWorkspaceAndRole = WorkspaceMemberType & {
+  workspace: WorkspaceType;
+  role: RoleType;
+};
 
 export type ActiveWorkspace = {
   membershipId: string;
@@ -17,12 +21,46 @@ export type ActiveWorkspace = {
 };
 
 /** All non-removed workspace memberships for a user, oldest first. */
-export async function listMemberships(userId: string) {
-  return prisma.workspaceMember.findMany({
-    where: { userId, deletedAt: null },
-    orderBy: { createdAt: "asc" },
-    include: { workspace: true, role: true },
-  });
+export async function listMemberships(userId: string): Promise<MembershipWithWorkspaceAndRole[]> {
+  await dbConnect();
+  const members = await WorkspaceMember.find({ userId, deletedAt: null }).sort({ createdAt: 1 });
+  if (members.length === 0) return [];
+
+  const workspaceIds = members.map((m) => m.workspaceId);
+  const roleIds = members.map((m) => m.roleId);
+  const [workspaces, roles] = await Promise.all([
+    Workspace.find({ _id: { $in: workspaceIds } }),
+    Role.find({ _id: { $in: roleIds } }),
+  ]);
+  const workspaceById = new Map(workspaces.map((w) => [w.id, w.toObject() as WorkspaceType]));
+  const roleById = new Map(roles.map((r) => [r.id, r.toObject() as RoleType]));
+
+  return members.map((m) => ({
+    ...(m.toObject() as WorkspaceMemberType),
+    workspace: workspaceById.get(m.workspaceId)!,
+    role: roleById.get(m.roleId)!,
+  }));
+}
+
+export type AssignableWorkspaceMember = { userId: string; email: string; name: string | null };
+
+/** Active (non-removed, non-invited-only) members of a workspace, for populating an "Assign to"/"Owner" dropdown — e.g. Contact ownership, ContactTask assignment. */
+export async function listActiveWorkspaceMembers(workspaceId: string): Promise<AssignableWorkspaceMember[]> {
+  await dbConnect();
+  const members = await WorkspaceMember.find({ workspaceId, deletedAt: null, status: "ACTIVE" }).sort({ createdAt: 1 });
+  if (members.length === 0) return [];
+
+  const users = await User.find({ _id: { $in: members.map((m) => m.userId) } });
+  const userById = new Map(users.map((u) => [u.id, u]));
+
+  const result: AssignableWorkspaceMember[] = [];
+  for (const m of members) {
+    const user = userById.get(m.userId);
+    if (!user) continue;
+    const name: string | null = user.name ?? null;
+    result.push({ userId: user.id as string, email: user.email as string, name });
+  }
+  return result;
 }
 
 /**
@@ -69,30 +107,26 @@ export async function requireActiveWorkspace(): Promise<ActiveWorkspace> {
 
 /**
  * Creates a Workspace and makes `userId` its OWNER. Shared by signup and
- * "create workspace". Pass a transaction client to compose this into a
- * larger transaction (e.g. alongside creating the User itself).
+ * "create workspace". Not wrapped in a DB transaction — standalone MongoDB
+ * (no replica set) doesn't support multi-document transactions; acceptable
+ * for an MVP, worth revisiting once this matters in production.
  */
-export async function createWorkspaceWithOwner(
-  name: string,
-  userId: string,
-  client: Prisma.TransactionClient | typeof prisma = prisma,
-) {
-  const ownerRole = await client.role.findUnique({ where: { key: "OWNER" } });
+export async function createWorkspaceWithOwner(name: string, userId: string) {
+  await dbConnect();
+  const ownerRole = await Role.findOne({ key: "OWNER" });
   if (!ownerRole) {
-    throw new Error("Missing OWNER role — run `npx prisma db seed`.");
+    throw new Error("Missing OWNER role — run `npm run seed`.");
   }
 
-  const slug = await uniqueWorkspaceSlug(name, client);
+  const slug = await uniqueWorkspaceSlug(name);
 
-  const workspace = await client.workspace.create({ data: { name, slug } });
-  await client.workspaceMember.create({
-    data: {
-      workspaceId: workspace.id,
-      userId,
-      roleId: ownerRole.id,
-      status: "ACTIVE",
-      joinedAt: new Date(),
-    },
+  const workspace = await Workspace.create({ name, slug });
+  await WorkspaceMember.create({
+    workspaceId: workspace.id,
+    userId,
+    roleId: ownerRole.id,
+    status: "ACTIVE",
+    joinedAt: new Date(),
   });
   return workspace;
 }

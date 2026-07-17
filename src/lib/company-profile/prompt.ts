@@ -1,5 +1,5 @@
 import "server-only";
-import type { WebsiteAnalysis } from "@/generated/prisma/client";
+import type { WebsiteAnalysis } from "@/models";
 import { MAX_LINKS_PER_CATEGORY_FOR_PROMPT, MAX_VISIBLE_TEXT_FOR_PROMPT } from "./constants";
 
 export const EXTRACTION_SYSTEM_PROMPT = `You are a market intelligence analyst. You are given structured content

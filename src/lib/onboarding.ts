@@ -1,6 +1,7 @@
 import "server-only";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
+import { dbConnect } from "@/lib/mongodb";
+import { WorkspaceOnboarding } from "@/models";
 import { requireActiveWorkspace, type ActiveWorkspace } from "@/lib/workspace";
 import { ONBOARDING_STEPS } from "@/config/onboarding";
 
@@ -20,22 +21,50 @@ function slugForStep(step: number): OnboardingStepSlug {
 }
 
 /** Fetches (creating if needed) the onboarding row for a workspace. */
-export async function getOrCreateOnboarding(workspaceId: string) {
-  const existing = await prisma.workspaceOnboarding.findUnique({ where: { workspaceId } });
+export async function getOrCreateOnboarding(workspaceId: string): Promise<WorkspaceOnboarding> {
+  await dbConnect();
+  const existing = await WorkspaceOnboarding.findOne({ workspaceId });
   if (existing) return existing;
 
-  return prisma.workspaceOnboarding.create({
-    data: { workspaceId, status: "NOT_STARTED", currentStep: 1, startedAt: new Date() },
+  return WorkspaceOnboarding.create({
+    workspaceId,
+    status: "NOT_STARTED",
+    currentStep: 1,
+    startedAt: new Date(),
   });
 }
 
 /** Read-only check used to gate the dashboard — does not create a row. */
 export async function isOnboardingComplete(workspaceId: string): Promise<boolean> {
-  const onboarding = await prisma.workspaceOnboarding.findUnique({
-    where: { workspaceId },
-    select: { status: true },
-  });
+  await dbConnect();
+  const onboarding = await WorkspaceOnboarding.findOne({ workspaceId }, { status: 1 });
   return onboarding?.status === "COMPLETED";
+}
+
+export type OnboardingStatusSummary = {
+  status: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
+  currentStep: number;
+  currentStepSlug: OnboardingStepSlug;
+  totalSteps: number;
+};
+
+/**
+ * Read-only status summary for a workspace's onboarding — does not create a
+ * row (a workspace that's never started onboarding reads as NOT_STARTED at
+ * step 1, not a 404). The "Get onboarding status" query surfaced to callers
+ * that just need to know where a workspace stands, without the redirect
+ * side effects of requireOnboardingStep.
+ */
+export async function getOnboardingStatus(workspaceId: string): Promise<OnboardingStatusSummary> {
+  await dbConnect();
+  const onboarding = await WorkspaceOnboarding.findOne({ workspaceId });
+  const currentStep = onboarding?.currentStep ?? 1;
+  return {
+    status: onboarding?.status ?? "NOT_STARTED",
+    currentStep,
+    currentStepSlug: slugForStep(currentStep),
+    totalSteps: ONBOARDING_STEPS.length,
+  };
 }
 
 /**

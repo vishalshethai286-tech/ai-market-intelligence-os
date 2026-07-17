@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import type { BrainFact, BrainFactVerificationStatus, BrainFeedbackType } from "@/generated/prisma/client";
+import type { BrainFact, BrainFactVerificationStatus, BrainFeedbackType } from "@/models";
 import { markFactVerificationAction, submitBrainFeedbackAction } from "@/lib/actions/business-brain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

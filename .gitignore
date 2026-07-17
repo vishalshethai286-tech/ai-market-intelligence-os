@@ -52,3 +52,7 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# local JSON-file storage for manually-added data (see src/lib/json-store.ts) —
+# per-machine business data, not something to check into source control.
+/data/

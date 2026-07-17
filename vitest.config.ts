@@ -15,5 +15,11 @@ export default defineConfig({
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.ts"],
+    // These are DB-integration tests sharing one real Postgres instance, and
+    // some (src/lib/discovery/service.test.ts) scan/act across ALL
+    // workspaces, not just their own — running test files in parallel risks
+    // one file's in-flight fixture data being swept up by another file's
+    // global query. Sequential is slower but deterministic.
+    fileParallelism: false,
   },
 });

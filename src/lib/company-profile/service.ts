@@ -1,13 +1,15 @@
 import "server-only";
-import { prisma } from "@/lib/prisma";
-import { extractCompanyProfile } from "./extract";
+import { dbConnect } from "@/lib/mongodb";
+import { CompanyProfile, WebsiteAnalysis, WorkspaceOnboarding } from "@/models";
+import { extractCompanyProfileAI } from "@/lib/ai-extraction";
 import type { ExtractedCompanyProfile, OperationType } from "./schema";
-import type { Prisma } from "@/generated/prisma/client";
 
 export class NoAnalysisError extends Error {}
 
-export function getCompanyProfile(workspaceId: string) {
-  return prisma.companyProfile.findUnique({ where: { workspaceId } });
+export async function getCompanyProfile(workspaceId: string): Promise<CompanyProfile | null> {
+  await dbConnect();
+  const profile = await CompanyProfile.findOne({ workspaceId });
+  return profile ? (profile.toObject() as CompanyProfile) : null;
 }
 
 function toProfileFields(extracted: ExtractedCompanyProfile) {
@@ -31,48 +33,62 @@ function toProfileFields(extracted: ExtractedCompanyProfile) {
  * always requires re-review, even if the previous draft was approved. The
  * model's original output for this run is kept in `aiRawExtraction` as an
  * audit trail, independent of whatever the user edits afterward.
+ *
+ * website/workEmail/targetCountries/preferredCustomerTypes are denormalized
+ * from the workspace's WorkspaceOnboarding row (set during onboarding, not
+ * inferred by the AI) so the durable CompanyProfile carries the full
+ * "initial business understanding" on its own, without downstream features
+ * needing to join through the wizard-progress-only onboarding row.
  */
 export async function generateCompanyProfile(workspaceId: string) {
-  const analysis = await prisma.websiteAnalysis.findFirst({
-    where: { workspaceId, status: "COMPLETED" },
-    orderBy: { createdAt: "desc" },
-  });
+  await dbConnect();
+  const [analysis, onboarding] = await Promise.all([
+    WebsiteAnalysis.findOne({ workspaceId, status: "COMPLETED" }).sort({ createdAt: -1 }),
+    WorkspaceOnboarding.findOne({ workspaceId }),
+  ]);
   if (!analysis) {
     throw new NoAnalysisError("Run a website analysis before generating a company profile.");
   }
 
-  const extracted = await extractCompanyProfile(analysis);
+  const extracted = await extractCompanyProfileAI(analysis);
   const fields = toProfileFields(extracted);
-  const aiRawExtraction = extracted as unknown as Prisma.InputJsonValue;
+  const aiRawExtraction = extracted as unknown;
+  const onboardingFields = {
+    website: onboarding?.companyWebsite ?? analysis.url,
+    workEmail: onboarding?.workEmail ?? null,
+    targetCountries: onboarding?.targetCountries ?? [],
+    preferredCustomerTypes: onboarding?.customerTypes ?? [],
+  };
 
-  return prisma.companyProfile.upsert({
-    where: { workspaceId },
-    create: {
-      workspaceId,
-      websiteAnalysisId: analysis.id,
-      ...fields,
-      sourceUrls: [analysis.url],
-      aiRawExtraction,
-      status: "PENDING_REVIEW",
+  return CompanyProfile.findOneAndUpdate(
+    { workspaceId },
+    {
+      $set: {
+        workspaceId,
+        websiteAnalysisId: analysis.id,
+        ...fields,
+        ...onboardingFields,
+        sourceUrls: [analysis.url],
+        aiRawExtraction,
+        status: "PENDING_REVIEW",
+        approvedAt: null,
+        approvedByUserId: null,
+      },
     },
-    update: {
-      websiteAnalysisId: analysis.id,
-      ...fields,
-      sourceUrls: [analysis.url],
-      aiRawExtraction,
-      status: "PENDING_REVIEW",
-      approvedAt: null,
-      approvedByUserId: null,
-    },
-  });
+    { upsert: true, new: true },
+  );
 }
 
 export type CompanyProfileEditableFields = {
   companyName: string;
+  website: string;
+  workEmail: string;
   businessDescription: string;
   industry: string;
   businessModel: string;
   countriesServed: string[];
+  targetCountries: string[];
+  preferredCustomerTypes: string[];
   headquarters: string;
   operationType: OperationType;
   certifications: string[];
@@ -81,25 +97,33 @@ export type CompanyProfileEditableFields = {
 
 /** Applies a user's edits to the current fields. Leaves approval status untouched. */
 export async function updateCompanyProfile(workspaceId: string, fields: CompanyProfileEditableFields) {
-  return prisma.companyProfile.update({
-    where: { workspaceId },
-    data: {
+  await dbConnect();
+  return CompanyProfile.findOneAndUpdate(
+    { workspaceId },
+    {
       companyName: fields.companyName || null,
+      website: fields.website || null,
+      workEmail: fields.workEmail || null,
       businessDescription: fields.businessDescription || null,
       industry: fields.industry || null,
       businessModel: fields.businessModel || null,
       countriesServed: fields.countriesServed,
+      targetCountries: fields.targetCountries,
+      preferredCustomerTypes: fields.preferredCustomerTypes,
       headquarters: fields.headquarters || null,
       operationType: fields.operationType,
       certifications: fields.certifications,
       keyProductsServices: fields.keyProductsServices,
     },
-  });
+    { new: true },
+  );
 }
 
 export async function approveCompanyProfile(workspaceId: string, userId: string) {
-  return prisma.companyProfile.update({
-    where: { workspaceId },
-    data: { status: "APPROVED", approvedAt: new Date(), approvedByUserId: userId },
-  });
+  await dbConnect();
+  return CompanyProfile.findOneAndUpdate(
+    { workspaceId },
+    { status: "APPROVED", approvedAt: new Date(), approvedByUserId: userId },
+    { new: true },
+  );
 }

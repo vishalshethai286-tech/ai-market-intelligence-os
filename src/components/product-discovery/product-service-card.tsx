@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useActionState } from "react";
-import type { ProductService } from "@/generated/prisma/client";
+import type { ProductService } from "@/models";
 import {
   approveProductServiceAction,
   deleteProductServiceAction,
@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field-error";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +48,9 @@ export function ProductServiceCard({
             <Badge variant={badge.variant}>{badge.label}</Badge>
           </div>
         </div>
+        <p className="text-xs text-black/50 dark:text-white/50">
+          Last verified {record.lastVerifiedAt ? record.lastVerifiedAt.toLocaleDateString() : "never"}
+        </p>
         {record.sourceUrls.length > 0 && (
           <p className="text-xs text-black/50 dark:text-white/50">
             Source:{" "}
@@ -66,10 +70,20 @@ export function ProductServiceCard({
         <form action={action} className="flex flex-col gap-4">
           <input type="hidden" name="id" value={record.id} />
           <fieldset disabled={!canEdit || savePending} className="flex flex-col gap-4">
-            <div>
-              <Label htmlFor={`name-${record.id}`}>Name</Label>
-              <Input id={`name-${record.id}`} name="name" defaultValue={record.name} className="mt-1" />
-              <FieldError>{state?.errors?.name}</FieldError>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto]">
+              <div>
+                <Label htmlFor={`name-${record.id}`}>Name</Label>
+                <Input id={`name-${record.id}`} name="name" defaultValue={record.name} className="mt-1" />
+                <FieldError>{state?.errors?.name}</FieldError>
+              </div>
+              <div>
+                <Label htmlFor={`type-${record.id}`}>Type</Label>
+                <Select id={`type-${record.id}`} name="type" defaultValue={record.type} className="mt-1">
+                  <option value="PRODUCT">Product</option>
+                  <option value="SERVICE">Service</option>
+                </Select>
+                <FieldError>{state?.errors?.type}</FieldError>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -155,6 +169,71 @@ export function ProductServiceCard({
               />
               <FieldError>{state?.errors?.keywords}</FieldError>
             </div>
+
+            <div>
+              <Label htmlFor={`synonyms-${record.id}`}>Synonyms</Label>
+              <Input
+                id={`synonyms-${record.id}`}
+                name="synonyms"
+                defaultValue={record.synonyms.join(", ")}
+                placeholder="Alternate names a buyer might search for, comma-separated"
+                className="mt-1"
+              />
+              <FieldError>{state?.errors?.synonyms}</FieldError>
+            </div>
+
+            <div>
+              <Label htmlFor={`relatedProductsServices-${record.id}`}>Related products/services</Label>
+              <Input
+                id={`relatedProductsServices-${record.id}`}
+                name="relatedProductsServices"
+                defaultValue={record.relatedProductsServices.join(", ")}
+                placeholder="Comma-separated"
+                className="mt-1"
+              />
+              <FieldError>{state?.errors?.relatedProductsServices}</FieldError>
+            </div>
+
+            <details className="rounded-lg border border-black/[.08] p-3 dark:border-white/[.145]">
+              <summary className="cursor-pointer text-sm font-medium">
+                Discovery keywords (projects, tenders, vendor registration)
+              </summary>
+              <div className="mt-3 flex flex-col gap-4">
+                <div>
+                  <Label htmlFor={`projectKeywords-${record.id}`}>Project keywords</Label>
+                  <Input
+                    id={`projectKeywords-${record.id}`}
+                    name="projectKeywords"
+                    defaultValue={record.projectKeywords.join(", ")}
+                    placeholder="Comma-separated"
+                    className="mt-1"
+                  />
+                  <FieldError>{state?.errors?.projectKeywords}</FieldError>
+                </div>
+                <div>
+                  <Label htmlFor={`tenderKeywords-${record.id}`}>Tender keywords</Label>
+                  <Input
+                    id={`tenderKeywords-${record.id}`}
+                    name="tenderKeywords"
+                    defaultValue={record.tenderKeywords.join(", ")}
+                    placeholder="Comma-separated"
+                    className="mt-1"
+                  />
+                  <FieldError>{state?.errors?.tenderKeywords}</FieldError>
+                </div>
+                <div>
+                  <Label htmlFor={`vendorRegistrationKeywords-${record.id}`}>Vendor registration keywords</Label>
+                  <Input
+                    id={`vendorRegistrationKeywords-${record.id}`}
+                    name="vendorRegistrationKeywords"
+                    defaultValue={record.vendorRegistrationKeywords.join(", ")}
+                    placeholder="Comma-separated"
+                    className="mt-1"
+                  />
+                  <FieldError>{state?.errors?.vendorRegistrationKeywords}</FieldError>
+                </div>
+              </div>
+            </details>
           </fieldset>
 
           {canEdit && (

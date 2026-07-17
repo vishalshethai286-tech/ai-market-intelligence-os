@@ -14,9 +14,6 @@ export default function ForgotPasswordPage() {
         <p className="mt-1 text-sm text-black/60 dark:text-white/60">
           Enter your email and we&apos;ll send you a link to reset your password.
         </p>
-        <p className="mt-1 text-xs text-black/40 dark:text-white/40">
-          Placeholder only — no email is sent yet.
-        </p>
       </div>
 
       <ForgotPasswordForm />

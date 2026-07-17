@@ -1,10 +1,11 @@
 import "server-only";
-import { prisma } from "@/lib/prisma";
+import { dbConnect } from "@/lib/mongodb";
+import { SearchQuery as SearchQueryModel } from "@/models";
 import { getBusinessBrain, listBrainFacts, BrainNotReadyError } from "@/lib/business-brain/service";
-import { generateSearchQueries } from "./generate";
+import { generateSearchQueriesAI } from "@/lib/ai-extraction";
 import { QUERY_CATEGORIES } from "./constants";
 import type { QueryGeneratorContext } from "./prompt";
-import type { BrainFact, BrainFactType } from "@/generated/prisma/client";
+import type { BrainFact, BrainFactType, SearchQuery } from "@/models";
 
 export { BrainNotReadyError };
 export class InsufficientBrainContextError extends Error {}
@@ -13,20 +14,20 @@ function factValues(facts: BrainFact[], type: BrainFactType): string[] {
   return facts.filter((f) => f.factType === type).map((f) => f.factValue);
 }
 
-export function listSearchQueries(workspaceId: string) {
-  return prisma.searchQuery.findMany({
-    where: { workspaceId },
-    orderBy: [{ category: "asc" }, { createdAt: "desc" }],
-  });
+export async function listSearchQueries(workspaceId: string): Promise<SearchQuery[]> {
+  await dbConnect();
+  const rows = await SearchQueryModel.find({ workspaceId }).sort({ category: 1, createdAt: -1 });
+  return rows.map((r) => r.toObject() as SearchQuery);
 }
 
 /**
  * Generates candidate search queries across all 7 categories in
  * QUERY_CATEGORIES, grounded in the workspace's current Business Brain
- * facts, and stores them as SearchQuery rows. Deduped against past runs via
- * the `workspaceId`+`query` unique constraint — `createMany`'s
- * `skipDuplicates` silently skips any exact-string repeat rather than
- * erroring, so regenerating is safe to call repeatedly.
+ * facts, and stores them as SearchQuery rows. Deduped against past runs (and
+ * within this same batch) by `workspaceId`+`query` before inserting — this is
+ * this Mongoose model's equivalent of Prisma's `createMany`'s
+ * `skipDuplicates`, which silently skipped any exact-string repeat rather
+ * than erroring, so regenerating is safe to call repeatedly.
  */
 export async function generateAndStoreSearchQueries(workspaceId: string) {
   const brain = await getBusinessBrain(workspaceId);
@@ -34,6 +35,7 @@ export async function generateAndStoreSearchQueries(workspaceId: string) {
     throw new BrainNotReadyError("Build the initial Business Brain before generating search queries.");
   }
 
+  await dbConnect();
   const facts = await listBrainFacts(workspaceId);
 
   const context: QueryGeneratorContext = {
@@ -55,7 +57,7 @@ export async function generateAndStoreSearchQueries(workspaceId: string) {
     );
   }
 
-  const generated = await generateSearchQueries(context);
+  const generated = await generateSearchQueriesAI(context);
 
   const rows = QUERY_CATEGORIES.flatMap(({ key, category }) =>
     (generated[key] ?? []).map((item) => ({
@@ -71,7 +73,21 @@ export async function generateAndStoreSearchQueries(workspaceId: string) {
     return { attempted: 0, created: 0, queries: await listSearchQueries(workspaceId) };
   }
 
-  const result = await prisma.searchQuery.createMany({ data: rows, skipDuplicates: true });
+  const existing = await SearchQueryModel.find({ workspaceId, query: { $in: rows.map((r) => r.query) } }, { query: 1 });
+  const seenQueries = new Set(existing.map((r) => r.query as string));
 
-  return { attempted: rows.length, created: result.count, queries: await listSearchQueries(workspaceId) };
+  const toInsert: typeof rows = [];
+  for (const row of rows) {
+    if (seenQueries.has(row.query)) continue;
+    seenQueries.add(row.query);
+    toInsert.push(row);
+  }
+
+  let created = 0;
+  if (toInsert.length > 0) {
+    const inserted = await SearchQueryModel.insertMany(toInsert, { ordered: false });
+    created = inserted.length;
+  }
+
+  return { attempted: rows.length, created, queries: await listSearchQueries(workspaceId) };
 }

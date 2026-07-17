@@ -1,26 +1,23 @@
 import "server-only";
-import { prisma } from "@/lib/prisma";
-import { analyzeWebsite } from "@/lib/website-analyzer";
+import { dbConnect } from "@/lib/mongodb";
+import { WebsiteAnalysis } from "@/models";
+import { analyzeWebsite, fetchAndStorePageSnapshots } from "@/lib/website-analyzer";
 import { REANALYSIS_COOLDOWN_MS } from "@/lib/website-analyzer/constants";
-import type { Prisma } from "@/generated/prisma/client";
 
 /** Prevents spamming re-analysis of the same workspace in quick succession. */
 export async function canStartNewAnalysis(workspaceId: string): Promise<boolean> {
-  const latest = await prisma.websiteAnalysis.findFirst({
-    where: { workspaceId },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true, status: true },
+  await dbConnect();
+  const latest = await WebsiteAnalysis.findOne({ workspaceId }, { createdAt: 1, status: 1 }).sort({
+    createdAt: -1,
   });
   if (!latest) return true;
   if (latest.status === "RUNNING") return false;
   return Date.now() - latest.createdAt.getTime() > REANALYSIS_COOLDOWN_MS;
 }
 
-export function getLatestAnalysis(workspaceId: string) {
-  return prisma.websiteAnalysis.findFirst({
-    where: { workspaceId },
-    orderBy: { createdAt: "desc" },
-  });
+export async function getLatestAnalysis(workspaceId: string) {
+  await dbConnect();
+  return WebsiteAnalysis.findOne({ workspaceId }).sort({ createdAt: -1 });
 }
 
 /**
@@ -30,17 +27,16 @@ export function getLatestAnalysis(workspaceId: string) {
  * best-effort enrichment, not a blocking step.
  */
 export async function runAndStoreWebsiteAnalysis(workspaceId: string, url: string) {
-  const analysis = await prisma.websiteAnalysis.create({
-    data: { workspaceId, url, status: "RUNNING" },
-  });
+  await dbConnect();
+  const analysis = await WebsiteAnalysis.create({ workspaceId, url, status: "RUNNING" });
 
   const result = await analyzeWebsite(url);
-  const rawResult = result as unknown as Prisma.InputJsonValue;
+  const rawResult = result as unknown;
 
   if (!result.ok) {
-    return prisma.websiteAnalysis.update({
-      where: { id: analysis.id },
-      data: {
+    return WebsiteAnalysis.findByIdAndUpdate(
+      analysis.id,
+      {
         status: "FAILED",
         error: result.error,
         robotsAllowed: result.robotsAllowed,
@@ -48,12 +44,13 @@ export async function runAndStoreWebsiteAnalysis(workspaceId: string, url: strin
         fetchedAt: new Date(),
         rawResult,
       },
-    });
+      { new: true },
+    );
   }
 
-  return prisma.websiteAnalysis.update({
-    where: { id: analysis.id },
-    data: {
+  const updated = await WebsiteAnalysis.findByIdAndUpdate(
+    analysis.id,
+    {
       status: "COMPLETED",
       httpStatus: result.httpStatus,
       robotsAllowed: result.robotsAllowed,
@@ -66,5 +63,26 @@ export async function runAndStoreWebsiteAnalysis(workspaceId: string, url: strin
       rawResult,
       fetchedAt: new Date(),
     },
-  });
+    { new: true },
+  );
+
+  try {
+    await fetchAndStorePageSnapshots(
+      workspaceId,
+      analysis.id,
+      {
+        url: result.finalUrl,
+        title: result.title,
+        metaDescription: result.metaDescription,
+        visibleText: result.visibleText,
+        httpStatus: result.httpStatus,
+      },
+      result.identifiedPages,
+    );
+  } catch {
+    // Snapshot storage is best-effort enrichment for downstream discovery —
+    // never fail the analysis itself over it.
+  }
+
+  return updated;
 }

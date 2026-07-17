@@ -1,7 +1,8 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { prisma } from "@/lib/prisma";
+import { dbConnect } from "@/lib/mongodb";
+import { User } from "@/models";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
@@ -21,18 +22,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        const user = await prisma.user.findUnique({
-          where: { email: email.toLowerCase() },
-        });
+        await dbConnect();
+        const user = await User.findOne({ email: email.toLowerCase() });
         if (!user?.passwordHash || user.deletedAt) return null;
 
         const isValid = await bcrypt.compare(password, user.passwordHash);
         if (!isValid) return null;
 
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { lastLoginAt: new Date() },
-        });
+        user.lastLoginAt = new Date();
+        await user.save();
 
         return { id: user.id, email: user.email, name: user.name };
       },

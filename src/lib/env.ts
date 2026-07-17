@@ -8,8 +8,8 @@ import * as z from "zod";
  * which category each variable belongs to and whether it's required.
  */
 const RequiredEnvSchema = z.object({
-  DATABASE_URL: z.string({ error: "DATABASE_URL is required — see .env.example." }).min(1, {
-    error: "DATABASE_URL is required — see .env.example.",
+  MONGODB_URI: z.string({ error: "MONGODB_URI is required — see .env.example." }).min(1, {
+    error: "MONGODB_URI is required — see .env.example.",
   }),
   AUTH_SECRET: z.string({ error: "AUTH_SECRET is required — see .env.example." }).min(1, {
     error: "AUTH_SECRET is required — see .env.example.",
@@ -25,9 +25,9 @@ export class MissingEnvError extends Error {}
  * Validates every required environment variable up front, failing fast with
  * one aggregated, human-readable error instead of letting each missing
  * variable surface later as a confusing runtime crash deep inside a request
- * (e.g. Prisma throwing because DATABASE_URL was never set). Called from
+ * (e.g. Mongoose throwing because MONGODB_URI was never set). Called from
  * `src/instrumentation.ts` on server start (reliable under `next start`,
- * best-effort on Vercel) and from `src/lib/prisma.ts` on import (the gate
+ * best-effort on Vercel) and from `src/lib/mongodb.ts` on import (the gate
  * Vercel actually enforces per-request — see the comment there).
  */
 export function validateEnv(): void {

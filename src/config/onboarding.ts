@@ -17,13 +17,25 @@ export const TARGET_COUNTRIES = [
   { code: "NZ", name: "New Zealand" },
 ] as const;
 
+/**
+ * Sentinel meaning "every country" rather than a specific selection —
+ * mutually exclusive with picking from TARGET_COUNTRIES (see countries-form.tsx).
+ * Stored in the same targetCountries string array, not a separate column.
+ */
+export const WORLDWIDE_CODE = "WORLDWIDE";
+
 export const CUSTOMER_TYPES = [
-  { code: "B2B", name: "B2B" },
-  { code: "B2C", name: "B2C" },
-  { code: "ENTERPRISE", name: "Enterprise" },
-  { code: "SMB", name: "Small & Medium Business" },
-  { code: "STARTUPS", name: "Startups" },
-  { code: "GOVERNMENT", name: "Government & Public Sector" },
+  { code: "MANUFACTURERS", name: "Manufacturers" },
+  { code: "EXPORTERS", name: "Exporters" },
+  { code: "IMPORTERS", name: "Importers" },
+  { code: "DISTRIBUTORS", name: "Distributors" },
+  { code: "EPC_CONTRACTORS", name: "EPC contractors" },
+  { code: "END_USERS", name: "End users" },
+  { code: "GOVERNMENT_BUYERS", name: "Government buyers" },
+  { code: "SERVICE_COMPANIES", name: "Service companies" },
+  { code: "OEMS", name: "OEMs" },
+  { code: "CONSULTANTS", name: "Consultants" },
+  { code: "OTHERS", name: "Others" },
 ] as const;
 
 export const ONBOARDING_STEPS = [

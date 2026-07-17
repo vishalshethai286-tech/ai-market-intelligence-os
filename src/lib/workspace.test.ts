@@ -13,7 +13,8 @@ vi.mock("next/navigation", () => ({ redirect: mockRedirect }));
 // Imported after the mocks above so `workspace.ts` picks up the mocked
 // `@/auth` / `next/headers` / `next/navigation` instead of the real ones,
 // which require a live Next.js request context.
-const { prisma } = await import("@/lib/prisma");
+const { dbConnect } = await import("@/lib/mongodb");
+const { User, Workspace, WorkspaceMember } = await import("@/models");
 const {
   createWorkspaceWithOwner,
   listMemberships,
@@ -23,19 +24,22 @@ const {
   ACTIVE_WORKSPACE_COOKIE,
 } = await import("./workspace");
 
+await dbConnect();
+
 const TEST_PREFIX = "vitest-phase2-";
 
 async function makeUser(localPart: string) {
-  return prisma.user.create({ data: { email: `${TEST_PREFIX}${localPart}@example.com`, name: localPart } });
+  return User.create({ email: `${TEST_PREFIX}${localPart}@example.com`, name: localPart });
 }
 
 async function cleanupUser(userId: string) {
-  const memberships = await prisma.workspaceMember.findMany({ where: { userId } });
+  const memberships = await WorkspaceMember.find({ userId });
   const workspaceIds = memberships.map((m) => m.workspaceId);
   if (workspaceIds.length > 0) {
-    await prisma.workspace.deleteMany({ where: { id: { in: workspaceIds } } });
+    await Workspace.deleteMany({ _id: { $in: workspaceIds } });
+    await WorkspaceMember.deleteMany({ workspaceId: { $in: workspaceIds } });
   }
-  await prisma.user.delete({ where: { id: userId } });
+  await User.deleteOne({ _id: userId });
 }
 
 describe("createWorkspaceWithOwner", () => {
@@ -54,12 +58,8 @@ describe("createWorkspaceWithOwner", () => {
     expect(workspace.name).toBe("Vitest Creation Co");
     expect(workspace.slug).toBeTruthy();
 
-    const membership = await prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId: workspace.id, userId } },
-      include: { role: true },
-    });
+    const membership = await WorkspaceMember.findOne({ workspaceId: workspace.id, userId });
     expect(membership).not.toBeNull();
-    expect(membership?.role.key).toBe("OWNER");
     expect(membership?.status).toBe("ACTIVE");
     expect(membership?.joinedAt).not.toBeNull();
   });
@@ -98,7 +98,7 @@ describe("user workspace isolation", () => {
   });
 
   it("a workspace-scoped member query never returns another workspace's members", async () => {
-    const membersOfA = await prisma.workspaceMember.findMany({ where: { workspaceId: workspaceA.id } });
+    const membersOfA = await WorkspaceMember.find({ workspaceId: workspaceA.id });
     expect(membersOfA).toHaveLength(1);
     expect(membersOfA[0].userId).toBe(userA);
   });

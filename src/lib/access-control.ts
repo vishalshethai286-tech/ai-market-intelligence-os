@@ -29,6 +29,7 @@ const BILLING_MANAGER_ROLES: readonly string[] = [ROLES.OWNER];
 const COMPANY_PROFILE_EDITOR_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER, ROLES.USER];
 const PRODUCT_CATALOG_EDITOR_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER, ROLES.USER];
 const BRAIN_FACT_REVIEWER_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER, ROLES.USER];
+const DISCOVERY_MANAGER_ROLES: readonly string[] = [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER, ROLES.USER];
 
 /** True for the internal platform-team role, which bypasses every per-workspace permission check below. */
 export function isPlatformAdmin(role: string): boolean {
@@ -71,6 +72,11 @@ export function canEditProductCatalog(role: string): boolean {
 /** Mark AI Business Brain facts as correct/incorrect/needs review. Viewers are read-only. */
 export function canReviewBrainFacts(role: string): boolean {
   return hasRole(role, BRAIN_FACT_REVIEWER_ROLES);
+}
+
+/** Trigger discovery runs, and approve/reject/delete discovered target companies. Viewers are read-only. */
+export function canManageDiscovery(role: string): boolean {
+  return hasRole(role, DISCOVERY_MANAGER_ROLES);
 }
 
 /**

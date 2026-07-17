@@ -13,7 +13,7 @@ import {
   BrainNotReadyError,
   BrainRefreshCooldownError,
 } from "@/lib/business-brain/service";
-import type { BrainFactVerificationStatus, BrainFeedbackType } from "@/generated/prisma/client";
+import type { BrainFactVerificationStatus, BrainFeedbackType } from "@/models";
 
 const BRAIN_PATH = "/dashboard/business-brain";
 

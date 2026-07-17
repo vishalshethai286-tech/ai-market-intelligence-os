@@ -18,3 +18,14 @@ export const MAX_HEADINGS_PER_LEVEL = 20;
 
 /** Minimum time between analysis runs for the same workspace. */
 export const REANALYSIS_COOLDOWN_MS = 60_000;
+
+/**
+ * Which identified-page categories are worth fetching beyond the homepage
+ * (see page-snapshots.ts) — the ones most likely to contain product/service
+ * detail, not every category the classifier recognizes.
+ */
+export const SNAPSHOT_FETCH_CATEGORIES = ["product", "service", "catalog", "applications", "downloads"] as const;
+/** Non-aggressive cap on how many extra pages we fetch beyond the homepage per analysis run. */
+export const MAX_PAGE_SNAPSHOTS = 6;
+/** Per-page text cap so a handful of snapshots combine into a bounded AI prompt. */
+export const MAX_SNAPSHOT_TEXT_LENGTH = 2_500;

@@ -10,7 +10,10 @@ export const WorkspaceNameSchema = z.object({
 });
 
 export const InviteMemberSchema = z.object({
-  email: z.email({ error: "Please enter a valid email." }).trim().toLowerCase(),
+  // Trim/lowercase before validating format — a raw z.email().trim() would
+  // reject a value with incidental leading/trailing whitespace, since the
+  // format check runs before the trim in declaration order.
+  email: z.string().trim().toLowerCase().pipe(z.email({ error: "Please enter a valid email." })),
   role: z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.USER, ROLES.VIEWER], {
     error: "Please choose a role.",
   }),

@@ -6,10 +6,14 @@ export { toList };
 
 export const CompanyProfileSchema = z.object({
   companyName: z.string().trim().max(200),
+  website: z.string().trim().max(500),
+  workEmail: z.string().trim().max(200),
   businessDescription: z.string().trim().max(2000),
   industry: z.string().trim().max(200),
   businessModel: z.string().trim().max(200),
   countriesServed: z.array(z.string().trim().max(100)).max(50),
+  targetCountries: z.array(z.string().trim().max(50)).max(250),
+  preferredCustomerTypes: z.array(z.string().trim().max(50)).max(50),
   headquarters: z.string().trim().max(200),
   operationType: z.enum(OPERATION_TYPES, { error: "Select a valid operation type." }),
   certifications: z.array(z.string().trim().max(100)).max(50),

@@ -25,6 +25,8 @@ export function CustomerTypesForm({ defaultValue }: { defaultValue: string[] }) 
         ))}
       </div>
 
+      <p className="text-xs text-black/50 dark:text-white/50">Optional — you can skip this and add it later.</p>
+
       <FieldError>{state?.errors?.customerTypes}</FieldError>
       <FieldError>{state?.message}</FieldError>
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { prisma } from "@/lib/prisma";
+import { dbConnect } from "@/lib/mongodb";
+import { WorkspaceMember, User, Role } from "@/models";
 import { requireActiveWorkspace } from "@/lib/workspace";
 import { canInviteMembers, canManageWorkspace } from "@/lib/access-control";
 import { RenameWorkspaceForm } from "./rename-workspace-form";
@@ -13,11 +14,22 @@ export const metadata: Metadata = {
 export default async function SettingsPage() {
   const active = await requireActiveWorkspace();
 
-  const members = await prisma.workspaceMember.findMany({
-    where: { workspaceId: active.workspace.id, deletedAt: null },
-    include: { user: true, role: true },
-    orderBy: { createdAt: "asc" },
+  await dbConnect();
+  const memberRows = await WorkspaceMember.find({ workspaceId: active.workspace.id, deletedAt: null }).sort({
+    createdAt: 1,
   });
+  const [users, roles] = await Promise.all([
+    User.find({ _id: { $in: memberRows.map((m) => m.userId) } }),
+    Role.find({ _id: { $in: memberRows.map((m) => m.roleId) } }),
+  ]);
+  const userById = new Map(users.map((u) => [u.id, u]));
+  const roleById = new Map(roles.map((r) => [r.id, r]));
+  const members = memberRows.map((m) => ({
+    id: m.id,
+    status: m.status,
+    user: { name: userById.get(m.userId)?.name ?? null, email: userById.get(m.userId)?.email ?? "" },
+    role: { name: roleById.get(m.roleId)?.name ?? "" },
+  }));
 
   const manage = canManageWorkspace(active.role);
   const invite = canInviteMembers(active.role);

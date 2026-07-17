@@ -6,6 +6,7 @@ import { requireActiveWorkspace } from "@/lib/workspace";
 import { canEditProductCatalog } from "@/lib/access-control";
 import {
   approveProductService,
+  createProductService,
   deleteProductService,
   generateProductServices,
   NoAnalysisError,
@@ -14,6 +15,7 @@ import {
   updateProductService,
 } from "@/lib/product-discovery/service";
 import { DiscoveryError } from "@/lib/product-discovery/extract";
+import { AIExtractionValidationError } from "@/lib/ai-extraction";
 import { ProductServiceSchema, toList, type ProductServiceFormState } from "@/lib/validations/product-service";
 
 // Revalidated everywhere the catalog can be viewed/edited: the dashboard
@@ -23,6 +25,7 @@ const PRODUCTS_PATHS = ["/dashboard", "/dashboard/products", "/onboarding/review
 
 function revalidateProductsPaths() {
   for (const path of PRODUCTS_PATHS) revalidatePath(path);
+  revalidatePath("/dashboard/products/[id]", "page");
 }
 
 export async function regenerateProductDiscoveryAction(): Promise<{ error?: string } | undefined> {
@@ -36,6 +39,7 @@ export async function regenerateProductDiscoveryAction(): Promise<{ error?: stri
   } catch (error) {
     if (error instanceof NoAnalysisError) return { error: error.message };
     if (error instanceof DiscoveryError) return { error: error.message };
+    if (error instanceof AIExtractionValidationError) return { error: error.message };
     return { error: "Couldn't run discovery right now. Please try again." };
   }
 
@@ -58,6 +62,7 @@ export async function updateProductServiceAction(
 
   const validatedFields = ProductServiceSchema.safeParse({
     name: formData.get("name"),
+    type: formData.get("type"),
     category: formData.get("category"),
     subcategory: formData.get("subcategory"),
     description: formData.get("description"),
@@ -65,6 +70,11 @@ export async function updateProductServiceAction(
     targetIndustries: toList(formData.get("targetIndustries")),
     buyerTypes: toList(formData.get("buyerTypes")),
     keywords: toList(formData.get("keywords")),
+    synonyms: toList(formData.get("synonyms")),
+    relatedProductsServices: toList(formData.get("relatedProductsServices")),
+    projectKeywords: toList(formData.get("projectKeywords")),
+    tenderKeywords: toList(formData.get("tenderKeywords")),
+    vendorRegistrationKeywords: toList(formData.get("vendorRegistrationKeywords")),
   });
   if (!validatedFields.success) {
     return { errors: validatedFields.error.flatten().fieldErrors };
@@ -79,6 +89,41 @@ export async function updateProductServiceAction(
 
   revalidateProductsPaths();
   return { message: "Changes saved." };
+}
+
+/** Adds a manually-created catalog entry — a human asserting a product/service exists, not an AI extraction. */
+export async function createProductServiceAction(
+  _prevState: ProductServiceFormState,
+  formData: FormData,
+): Promise<ProductServiceFormState> {
+  const active = await requireActiveWorkspace();
+  if (!canEditProductCatalog(active.role)) {
+    return { message: "You don't have access to add a catalog entry." };
+  }
+
+  const validatedFields = ProductServiceSchema.safeParse({
+    name: formData.get("name"),
+    type: formData.get("type"),
+    category: formData.get("category"),
+    subcategory: formData.get("subcategory"),
+    description: formData.get("description"),
+    applications: toList(formData.get("applications")),
+    targetIndustries: toList(formData.get("targetIndustries")),
+    buyerTypes: toList(formData.get("buyerTypes")),
+    keywords: toList(formData.get("keywords")),
+    synonyms: toList(formData.get("synonyms")),
+    relatedProductsServices: toList(formData.get("relatedProductsServices")),
+    projectKeywords: toList(formData.get("projectKeywords")),
+    tenderKeywords: toList(formData.get("tenderKeywords")),
+    vendorRegistrationKeywords: toList(formData.get("vendorRegistrationKeywords")),
+  });
+  if (!validatedFields.success) {
+    return { errors: validatedFields.error.flatten().fieldErrors };
+  }
+
+  await createProductService(active.workspace.id, validatedFields.data);
+  revalidateProductsPaths();
+  return { message: "Added." };
 }
 
 export async function approveProductServiceAction(id: string): Promise<{ error?: string } | undefined> {

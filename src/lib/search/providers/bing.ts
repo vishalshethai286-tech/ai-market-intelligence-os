@@ -31,6 +31,7 @@ export const bingSearchProvider: SearchProvider = {
       headers: { "Ocp-Apim-Subscription-Key": apiKey },
     });
 
+    const retrievedAt = new Date();
     return (data.webPages?.value ?? [])
       .filter((item) => Boolean(item.url))
       .slice(0, maxResults)
@@ -40,6 +41,8 @@ export const bingSearchProvider: SearchProvider = {
         url: item.url!,
         domain: item.displayUrl || domainFromUrl(item.url!),
         provider: "BING" as const,
+        retrievedAt,
+        rawPayload: item,
       }));
   },
 };

@@ -20,6 +20,13 @@ enum WorkspaceMemberStatus {
   SUSPENDED
 }
 
+enum WorkspaceInviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
 enum SubscriptionStatus {
   TRIALING
   ACTIVE
@@ -71,15 +78,36 @@ model User {
   memberships              WorkspaceMember[]
   apiCostLogs              ApiCostLog[]
   usageLogs                UsageLog[]
-  auditLogsActing          AuditLog[]        @relation("AuditLogActor")
-  approvedCompanyProfiles  CompanyProfile[]  @relation("CompanyProfileApprovedBy")
-  approvedProductServices  ProductService[]  @relation("ProductServiceApprovedBy")
-  triggeredBrainUpdateRuns BrainUpdateRun[]  @relation("BrainUpdateRunTriggeredBy")
-  verifiedBrainFacts       BrainFact[]       @relation("BrainFactVerifiedBy")
+  auditLogsActing          AuditLog[]           @relation("AuditLogActor")
+  approvedCompanyProfiles  CompanyProfile[]     @relation("CompanyProfileApprovedBy")
+  approvedProductServices  ProductService[]     @relation("ProductServiceApprovedBy")
+  triggeredBrainUpdateRuns BrainUpdateRun[]     @relation("BrainUpdateRunTriggeredBy")
+  verifiedBrainFacts       BrainFact[]          @relation("BrainFactVerifiedBy")
   brainFeedbackGiven       BrainFeedback[]
+  passwordResetTokens      PasswordResetToken[]
+  workspaceInvitesSent     WorkspaceInvite[]    @relation("WorkspaceInviteInvitedBy")
 
   @@index([deletedAt])
   @@map("users")
+}
+
+/// A single-use token emailed to a user to let them set a new password
+/// without being signed in. One outstanding token per request (old ones
+/// aren't invalidated on a new request — each just expires independently 1
+/// hour after creation).
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  token     String    @unique
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 /// A tenant. All tenant-scoped data (members, subscription, usage, logs)
@@ -94,24 +122,26 @@ model Workspace {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  members            WorkspaceMember[]
-  subscription       Subscription?
-  onboarding         WorkspaceOnboarding?
-  websiteAnalyses    WebsiteAnalysis[]
-  companyProfile     CompanyProfile?
-  productServices    ProductService[]
-  businessBrain      BusinessBrain?
-  brainFacts         BrainFact[]
-  brainSources       BrainSource[]
-  brainEntities      BrainEntity[]
-  brainRelationships BrainRelationship[]
-  brainUpdateRuns    BrainUpdateRun[]
-  brainFeedback      BrainFeedback[]
-  searchQueries      SearchQuery[]
-  targetCompanies    TargetCompany[]
-  usageLogs          UsageLog[]
-  apiCostLogs        ApiCostLog[]
-  auditLogs          AuditLog[]
+  members              WorkspaceMember[]
+  subscription         Subscription?
+  onboarding           WorkspaceOnboarding?
+  websiteAnalyses      WebsiteAnalysis[]
+  websitePageSnapshots WebsitePageSnapshot[]
+  companyProfile       CompanyProfile?
+  productServices      ProductService[]
+  businessBrain        BusinessBrain?
+  brainFacts           BrainFact[]
+  brainSources         BrainSource[]
+  brainEntities        BrainEntity[]
+  brainRelationships   BrainRelationship[]
+  brainUpdateRuns      BrainUpdateRun[]
+  brainFeedback        BrainFeedback[]
+  searchQueries        SearchQuery[]
+  targetCompanies      TargetCompany[]
+  usageLogs            UsageLog[]
+  apiCostLogs          ApiCostLog[]
+  auditLogs            AuditLog[]
+  invites              WorkspaceInvite[]
 
   @@index([deletedAt])
   @@map("workspaces")
@@ -132,6 +162,7 @@ model Role {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   members WorkspaceMember[]
+  invites WorkspaceInvite[]
 
   @@map("roles")
 }
@@ -163,6 +194,34 @@ model WorkspaceMember {
   @@map("workspace_members")
 }
 
+/// A pending invitation to join a Workspace, emailed to `email` with a link
+/// carrying `token`. Separate from WorkspaceMember (which requires an
+/// existing User) so someone without an account yet can be invited — the
+/// accept flow creates the User (if needed) and the WorkspaceMember together.
+model WorkspaceInvite {
+  id              String                @id @default(cuid())
+  workspaceId     String                @map("workspace_id")
+  email           String
+  roleId          String                @map("role_id")
+  token           String                @unique
+  invitedByUserId String?               @map("invited_by_user_id")
+  status          WorkspaceInviteStatus @default(PENDING)
+
+  expiresAt  DateTime  @map("expires_at")
+  acceptedAt DateTime? @map("accepted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy User?     @relation("WorkspaceInviteInvitedBy", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([email])
+  @@map("workspace_invites")
+}
+
 // ---------------------------------------------------------------------------
 // Billing
 // ---------------------------------------------------------------------------
@@ -180,6 +239,11 @@ model Plan {
   currency        String          @default("usd")
   billingInterval BillingInterval @default(MONTHLY) @map("billing_interval")
   trialDays       Int             @default(0) @map("trial_days")
+
+  /// Stripe Price id for checkout (price_...). Null for plans with no
+  /// self-serve checkout (e.g. Enterprise, priced by Contact Sales) — the
+  /// billing page falls back to a "Contact sales" link when this is unset.
+  stripePriceId String? @map("stripe_price_id")
 
   maxSeats      Int? @map("max_seats")
   maxWorkspaces Int? @map("max_workspaces")
@@ -374,7 +438,9 @@ enum WebsiteAnalysisStatus {
 }
 
 /// Raw result of fetching + parsing a workspace's company homepage. One row
-/// per analysis run (kept as history, not upserted), produced by
+/// per analysis run (kept as history, not upserted; this is the "website
+/// analysis run" record — same concept as "WebsiteAnalysisRun" in the Phase 3
+/// spec, kept under its original name rather than renamed), produced by
 /// src/lib/website-analyzer.
 model WebsiteAnalysis {
   id          String @id @default(cuid())
@@ -397,7 +463,8 @@ model WebsiteAnalysis {
   visibleText     String? @map("visible_text")
   /// [{ href, text }], same-origin links found on the homepage (not crawled).
   internalLinks   Json?   @map("internal_links")
-  /// { product: [...], service: [...], about: [...], industries: [...], catalog: [...], contact: [...] }
+  /// { product: [...], service: [...], about: [...], industries: [...], applications: [...],
+  ///   catalog: [...], contact: [...], downloads: [...], blog: [...], news: [...] }
   identifiedPages Json?   @map("identified_pages")
 
   /// Full structured payload as returned by the analyzer, for debugging or
@@ -409,14 +476,44 @@ model WebsiteAnalysis {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace       Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   companyProfiles CompanyProfile[]
   productServices ProductService[]
   brainSources    BrainSource[]
+  pageSnapshots   WebsitePageSnapshot[]
 
   @@index([workspaceId, createdAt])
   @@index([status])
   @@map("website_analyses")
+}
+
+/// A single fetched page (homepage or one of the bounded set of identified
+/// product/service/etc. pages) belonging to a WebsiteAnalysis run, persisted
+/// once so re-running product/service discovery against the same analysis
+/// doesn't re-fetch the target site — see src/lib/website-analyzer/page-snapshots.ts.
+model WebsitePageSnapshot {
+  id                String @id @default(cuid())
+  workspaceId       String @map("workspace_id")
+  websiteAnalysisId String @map("website_analysis_id")
+
+  url         String
+  /// One of PageCategory (src/lib/website-analyzer/classify.ts), or null for
+  /// the homepage itself, which isn't classified against its own links.
+  category    String?
+  title       String?
+  /// Visible body text, truncated the same way as WebsiteAnalysis.visibleText.
+  visibleText String? @map("visible_text")
+  httpStatus  Int?    @map("http_status")
+
+  fetchedAt DateTime @default(now()) @map("fetched_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  websiteAnalysis WebsiteAnalysis @relation(fields: [websiteAnalysisId], references: [id], onDelete: Cascade)
+
+  @@unique([websiteAnalysisId, url])
+  @@index([workspaceId])
+  @@map("website_page_snapshots")
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +544,18 @@ model CompanyProfile {
   workspaceId       String  @unique @map("workspace_id")
   websiteAnalysisId String? @map("website_analysis_id")
 
+  /// Denormalized from WorkspaceOnboarding at generation time, so downstream
+  /// features (Business Brain, discovery) can read the durable business
+  /// profile without joining through the (wizard-progress-only) onboarding row.
+  website                String?
+  workEmail              String?  @map("work_email")
+  /// ISO country codes the workspace onboarded with, or ["WORLDWIDE"] — see
+  /// src/config/onboarding.ts. Editable after onboarding, unlike countriesServed
+  /// (the AI's read of where the company already operates).
+  targetCountries        String[] @map("target_countries")
+  /// Codes from src/config/onboarding.ts CUSTOMER_TYPES, chosen at onboarding.
+  preferredCustomerTypes String[] @map("preferred_customer_types")
+
   companyName         String?              @map("company_name")
   businessDescription String?              @map("business_description")
   industry            String?
@@ -455,6 +564,8 @@ model CompanyProfile {
   /// Country names as mentioned/implied on the site, not an ISO-code list.
   countriesServed     String[]             @map("countries_served")
   headquarters        String?
+  /// Manufacturing / trading / service-provider classification — the
+  /// "manufacturingTradingServiceType" field from the Phase 3 spec.
   operationType       CompanyOperationType @default(UNKNOWN) @map("operation_type")
   certifications      String[]
   keyProductsServices String[]             @map("key_products_services")
@@ -493,34 +604,60 @@ enum ProductServiceStatus {
   REJECTED
 }
 
+/// Whether a catalog entry is a physical/tangible product or a service.
+enum ProductServiceType {
+  PRODUCT
+  SERVICE
+}
+
 /// AI-discovered product or service, generated from a workspace's website
 /// content (homepage plus a bounded set of identified product/service/catalog
 /// pages — see src/lib/product-discovery). Unlike CompanyProfile this is a
 /// catalog: many rows per workspace. Regenerating replaces PENDING_REVIEW and
 /// REJECTED rows with a fresh extraction but never touches APPROVED ones,
-/// which are treated as a finalized human decision.
+/// which are treated as a finalized human decision. Can also be added
+/// manually (canEditProductCatalog roles), not just AI-discovered.
 model ProductService {
   id                String  @id @default(cuid())
   workspaceId       String  @map("workspace_id")
   websiteAnalysisId String? @map("website_analysis_id")
 
-  name             String
-  category         String?
-  subcategory      String?
-  description      String?
+  name                       String
+  /// Defaults to PRODUCT for rows predating this field (existing AI-discovered
+  /// catalog entries); the extractor populates a real value going forward.
+  type                       ProductServiceType @default(PRODUCT)
+  category                   String?
+  subcategory                String?
+  description                String?
   /// Use cases / applications mentioned for this product or service.
-  applications     String[]
-  targetIndustries String[] @map("target_industries")
+  applications               String[]
+  targetIndustries           String[]           @map("target_industries")
   /// e.g. "OEM", "Distributor", "End consumer", "Government"
-  buyerTypes       String[] @map("buyer_types")
-  keywords         String[]
+  buyerTypes                 String[]           @map("buyer_types")
+  keywords                   String[]
+  /// Alternate names/spellings a buyer might search for instead of `name`.
+  synonyms                   String[]           @map("synonyms")
+  /// Names of other catalog entries commonly bought/bundled with this one.
+  relatedProductsServices    String[]           @map("related_products_services")
+  /// Search terms for the future project-discovery feature (see PRODUCT_VISION.md §6).
+  projectKeywords            String[]           @map("project_keywords")
+  /// Search terms for the future tender-discovery feature (see PRODUCT_VISION.md §7).
+  tenderKeywords             String[]           @map("tender_keywords")
+  /// Search terms for the future vendor-registration-discovery feature (see PRODUCT_VISION.md §8).
+  vendorRegistrationKeywords String[]           @map("vendor_registration_keywords")
 
-  /// URLs actually fetched and used as extraction input for this item.
-  sourceUrls      String[] @map("source_urls")
-  /// 0-1, the model's self-reported confidence in this extraction.
-  confidenceScore Float    @default(0) @map("confidence_score")
+  /// URLs actually fetched and used as extraction input for this item. Empty
+  /// for a manually-added entry.
+  sourceUrls      String[]  @map("source_urls")
+  /// 0-1, the model's self-reported confidence in this extraction. 1 for a
+  /// manually-added entry — a human asserting it is maximally confident.
+  confidenceScore Float     @default(0) @map("confidence_score")
+  /// When a human last confirmed this entry is still accurate, distinct from
+  /// `approvedAt` (a one-time review decision) — mirrors BrainFact.lastVerifiedAt.
+  lastVerifiedAt  DateTime? @map("last_verified_at")
 
   /// The AI's original output for this record, untouched by later user edits.
+  /// Null for a manually-added entry — there is no AI output to preserve.
   aiRawExtraction Json? @map("ai_raw_extraction")
 
   status           ProductServiceStatus @default(PENDING_REVIEW)

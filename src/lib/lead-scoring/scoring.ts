@@ -1,5 +1,5 @@
 import { SCORING_WEIGHTS, GRADE_THRESHOLDS } from "./constants";
-import type { TargetCompanyPriorityGrade } from "@/generated/prisma/client";
+import type { TargetCompanyPriorityGrade } from "@/models";
 
 /** The subset of TargetCompany fields the scorer actually reads. */
 export type ScorableTargetCompany = {

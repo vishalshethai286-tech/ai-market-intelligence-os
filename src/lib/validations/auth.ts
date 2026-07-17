@@ -2,7 +2,10 @@ import * as z from "zod";
 
 export const SignupSchema = z.object({
   name: z.string().trim().min(2, { error: "Name must be at least 2 characters." }),
-  email: z.email({ error: "Please enter a valid email." }).trim().toLowerCase(),
+  // Trim/lowercase before validating format — a raw z.email().trim() would
+  // reject a value with incidental leading/trailing whitespace, since the
+  // format check runs before the trim in declaration order.
+  email: z.string().trim().toLowerCase().pipe(z.email({ error: "Please enter a valid email." })),
   password: z
     .string()
     .min(8, { error: "Password must be at least 8 characters." })
@@ -11,8 +14,19 @@ export const SignupSchema = z.object({
 });
 
 export const LoginSchema = z.object({
-  email: z.email({ error: "Please enter a valid email." }).trim().toLowerCase(),
+  // Trim/lowercase before validating format — a raw z.email().trim() would
+  // reject a value with incidental leading/trailing whitespace, since the
+  // format check runs before the trim in declaration order.
+  email: z.string().trim().toLowerCase().pipe(z.email({ error: "Please enter a valid email." })),
   password: z.string().min(1, { error: "Password is required." }),
+});
+
+export const NewPasswordSchema = z.object({
+  password: z
+    .string()
+    .min(8, { error: "Password must be at least 8 characters." })
+    .regex(/[a-zA-Z]/, { error: "Password must contain at least one letter." })
+    .regex(/[0-9]/, { error: "Password must contain at least one number." }),
 });
 
 export type SignupFormState =

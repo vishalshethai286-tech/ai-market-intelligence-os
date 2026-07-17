@@ -33,6 +33,7 @@ export const googleCseSearchProvider: SearchProvider = {
 
     const data = await fetchJson<GoogleCseResponse>(url, { method: "GET" });
 
+    const retrievedAt = new Date();
     return (data.items ?? [])
       .filter((item) => Boolean(item.link))
       .slice(0, maxResults)
@@ -42,6 +43,8 @@ export const googleCseSearchProvider: SearchProvider = {
         url: item.link!,
         domain: item.displayLink || domainFromUrl(item.link!),
         provider: "GOOGLE_CSE" as const,
+        retrievedAt,
+        rawPayload: item,
       }));
   },
 };

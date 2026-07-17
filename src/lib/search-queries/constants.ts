@@ -1,4 +1,4 @@
-import type { SearchQueryCategory } from "@/generated/prisma/client";
+import type { SearchQueryCategory } from "@/models";
 
 export const QUERY_GENERATOR_MODEL = "claude-opus-4-8";
 export const QUERY_GENERATOR_MAX_TOKENS = 8192;

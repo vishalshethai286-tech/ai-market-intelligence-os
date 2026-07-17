@@ -4,8 +4,9 @@ import { fetchJson, domainFromUrl } from "../http";
 import { SearchProviderNotConfiguredError } from "../errors";
 import type { SearchProvider, SearchResult, SearchOptions } from "../types";
 
+type TavilyResult = { title?: string; content?: string; url?: string };
 type TavilyResponse = {
-  results?: { title?: string; content?: string; url?: string }[];
+  results?: TavilyResult[];
 };
 
 /**
@@ -31,6 +32,7 @@ export const tavilySearchProvider: SearchProvider = {
       body: JSON.stringify({ api_key: apiKey, query, max_results: maxResults }),
     });
 
+    const retrievedAt = new Date();
     return (data.results ?? [])
       .filter((item) => Boolean(item.url))
       .slice(0, maxResults)
@@ -40,6 +42,8 @@ export const tavilySearchProvider: SearchProvider = {
         url: item.url!,
         domain: domainFromUrl(item.url!),
         provider: "TAVILY" as const,
+        retrievedAt,
+        rawPayload: item,
       }));
   },
 };

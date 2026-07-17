@@ -1,7 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
+import { dbConnect } from "@/lib/mongodb";
+import { WorkspaceOnboarding } from "@/models";
 import { getOrCreateOnboarding, requireOnboardingStep, stepPath } from "@/lib/onboarding";
 import { canStartNewAnalysis, runAndStoreWebsiteAnalysis } from "@/lib/website-analysis";
 import { generateCompanyProfile } from "@/lib/company-profile/service";
@@ -20,14 +21,15 @@ import {
 
 async function saveStep(workspaceId: string, data: Record<string, unknown>, nextStep: number) {
   const onboarding = await getOrCreateOnboarding(workspaceId);
-  await prisma.workspaceOnboarding.update({
-    where: { workspaceId },
-    data: {
+  await dbConnect();
+  await WorkspaceOnboarding.updateOne(
+    { workspaceId },
+    {
       ...data,
       status: "IN_PROGRESS",
       currentStep: Math.max(onboarding.currentStep, nextStep),
     },
-  });
+  );
 }
 
 export async function saveWebsiteStep(
@@ -143,10 +145,11 @@ export async function completeOnboarding() {
     // Brain building is best-effort enrichment — don't block onboarding on it.
   }
 
-  await prisma.workspaceOnboarding.update({
-    where: { workspaceId: active.workspace.id },
-    data: { status: "COMPLETED", completedAt: new Date() },
-  });
+  await dbConnect();
+  await WorkspaceOnboarding.updateOne(
+    { workspaceId: active.workspace.id },
+    { status: "COMPLETED", completedAt: new Date() },
+  );
 
   redirect("/dashboard");
 }
